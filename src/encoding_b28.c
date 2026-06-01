@@ -40,7 +40,7 @@ bool b28_encode(struct dynarr* str, const void* bytes, const size_t n)
 	if (!str || !bytes)
 		return false;
 
-	const char null = '\0';
+	static const char null = '\0';
 
 	bool success = false;
 

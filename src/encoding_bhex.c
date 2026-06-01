@@ -7,21 +7,22 @@
 
 #define BHEX_CHAR_OFFSET 'a'
 #define BHEX_CHARS_PER_BYTE 2
+#define BHEX_BITS_PER_CHAR 4 // (8 / BHEX_CHARS_PER_BYTE)
 
 bool bhex_encode(struct dynarr* str, const void* bytes, const size_t n)
 {
 	if (!str || !bytes)
 		return false;
 
-	const char null = '\0';
+	static const char null = '\0';
 
 	bool success = false;
 
 	// Encode one byte at a time
 	for (size_t byte_ind = 0; byte_ind < n; byte_ind++) {
 		char chars[BHEX_CHARS_PER_BYTE] = {
-			BHEX_CHAR_OFFSET + (((uint8_t*)bytes)[byte_ind] >> 4),
-			BHEX_CHAR_OFFSET + (((uint8_t*)bytes)[byte_ind] & 0x0F)
+			BHEX_CHAR_OFFSET + (((uint8_t*)bytes)[byte_ind] >> BHEX_BITS_PER_CHAR),
+			BHEX_CHAR_OFFSET + (((uint8_t*)bytes)[byte_ind] & (0xFF >> BHEX_BITS_PER_CHAR))
 		};
 
 		if (!dynarr_set(str, str->len, &chars, BHEX_CHARS_PER_BYTE, sizeof(chars[0])))
@@ -48,8 +49,6 @@ bool bhex_decode(struct dynarr* bytes, const char* str, const size_t len)
 {
 	if (!bytes || !str)
 		return false;
-		
-	const int char_shifts[BHEX_CHARS_PER_BYTE] = {4, 0};
 
 	size_t bytes_n;
 	if (!bhex_decode_len(&bytes_n, len))
@@ -62,10 +61,10 @@ bool bhex_decode(struct dynarr* bytes, const char* str, const size_t len)
 		// Build byte value from each char
 		for (size_t byte_str_ind = 0; byte_str_ind < BHEX_CHARS_PER_BYTE; byte_str_ind++) {
 			char ch = str[str_ind + byte_str_ind];
-			if (ch < BHEX_CHAR_OFFSET || ch > (BHEX_CHAR_OFFSET + 0xF))
+			if (ch < BHEX_CHAR_OFFSET || ch > (BHEX_CHAR_OFFSET + (0xFF >> BHEX_BITS_PER_CHAR)))
 				return false;
 
-			byte += (ch - BHEX_CHAR_OFFSET) << char_shifts[byte_str_ind];
+			byte += (ch - BHEX_CHAR_OFFSET) << (BHEX_BITS_PER_CHAR * (BHEX_CHARS_PER_BYTE - byte_str_ind - 1));
 		}
 
 		if (!dynarr_push(bytes, &byte, sizeof(byte)))
