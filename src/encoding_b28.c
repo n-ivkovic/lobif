@@ -110,6 +110,7 @@ size_t b28_encode_len(const size_t n)
  * @param blocks Number of blocks to decode.
  * @param padding Length of padding applied to last block to decode.
  * @param len Length of Babel28 string to decode, excluding null-terminator.
+ * @returns Whether Babel28 string of given length can be decoded.
  */
 static bool b28_decode_calc_blocks(size_t* blocks, size_t* padding, const size_t len)
 {
@@ -120,7 +121,7 @@ static bool b28_decode_calc_blocks(size_t* blocks, size_t* padding, const size_t
 	*blocks = (size_t)len_div_chars.quot;
 	*padding = len_div_chars.rem > 0 ? B28_CHARS_PER_BLOCK - (size_t)len_div_chars.rem : 0;
 
-	if (*padding > B28_BYTES_PER_BLOCK) {
+	if (*padding >= B28_BYTES_PER_BLOCK) {
 		*blocks = 0;
 		*padding = 0;
 		return false;
