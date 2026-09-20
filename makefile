@@ -12,7 +12,7 @@ TESTDIR = test
 
 # Project artefact variables
 
-OBJS = dynarr.o encoding_bhex.o encoding_b28.o str.o cli.o
+OBJS = dynarr.o encoding_bhex.o encoding_b28.o lobi.o str.o cli.o
 BIN = lobif
 
 # Compiler variables
@@ -20,7 +20,7 @@ BIN = lobif
 CC         = gcc
 CPPFLAGS   =
 CFLAGS     = -std=c99 -Wall -Wextra -Wpedantic -Wvla -Werror
-LDFLAGS    = -lm
+LDFLAGS    = -lm -lcurl
 
 ifdef DEBUG
 	CFLAGS += -Og -g -DDEBUG
