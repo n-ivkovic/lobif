@@ -29,6 +29,7 @@ enum operation {
     LOB_PAGE_ENCODE_E,
     LOB_PAGE_DECODE_E,
     LOB_PAGE_GET_E,
+    LOB_PAGE_SEARCH_EXACT_E,
     INPUT_ENCODE_E,
     INPUT_DECODE_E
 };
@@ -59,6 +60,7 @@ static bool operation_parse(enum operation* opr, const char* str, const size_t l
         { .opr = LOB_PAGE_ENCODE_E, .str_lower = "write" },
         { .opr = LOB_PAGE_DECODE_E, .str_lower = "read" },
         { .opr = LOB_PAGE_GET_E, .str_lower = "get" },
+        { .opr = LOB_PAGE_SEARCH_EXACT_E, .str_lower = "search" },
         { .opr = INPUT_ENCODE_E, .str_lower = "encode" },
         { .opr = INPUT_DECODE_E, .str_lower = "decode" }
     };
@@ -344,6 +346,21 @@ static bool decode_fp(char* err, struct dynarr* bytes, FILE* fp, const size_t le
     return success;
 }
 
+static enum lobi_result page_search_exact_fp(char* err, struct dynarr* addr, FILE* fp)
+{
+    if (!fp) {
+        if (err) sprintf(err, "No file input given");
+        return FAILURE_INPUT_E;
+    }
+
+    // Read input string
+    char str_buffer[STR_CHARS(LOBI_PAGE_TEXT_LEN)] = {0};
+    fread(str_buffer, sizeof(str_buffer[0]), LOBI_PAGE_TEXT_LEN, fp);
+
+    // Return result
+    return lobi_page_search_exact(err, addr, str_buffer, strlen(str_buffer));
+}
+
 /**
  * Find Library of Babel page at address given in file.
  *
@@ -355,67 +372,26 @@ static bool decode_fp(char* err, struct dynarr* bytes, FILE* fp, const size_t le
  */
 static enum lobi_result page_get_fp(char* err, struct dynarr* text, FILE* fp)
 {
+    #define LOBI_PAGE_ADDR_BUFFER_LEN (LOBI_PAGE_ADDR_LEN + 16)
+
     if (!fp) {
         if (err) sprintf(err, "No file input given");
         return FAILURE_INPUT_E;
     }
 
-    enum lobi_result result = FAILURE_GENERAL_E;
-    char* str_buffer = NULL;
-    char* str_tr = NULL;
-    size_t str_len;
-
-    // Alloc space to read input string
-    str_buffer = calloc(STR_CHARS(LOBI_PAGE_ADDR_LEN), sizeof(char));
-    if (!str_buffer) {
-        if (err) sprintf(err, "Failed to allocate memory");
-        goto exit;
-    }
-
     // Read input string
-    fread(str_buffer, sizeof(str_buffer[0]), LOBI_PAGE_ADDR_LEN, fp);
-    str_len = strlen(str_buffer);
-
-    // Alloc space to trim whitespace from input string
-    str_tr = calloc(STR_CHARS(str_len), sizeof(char));
-    if (!str_tr) {
-        if (err) sprintf(err, "Failed to allocate memory");
-        goto exit;
-    }
+    char str_buffer[STR_CHARS(LOBI_PAGE_ADDR_BUFFER_LEN)] = {0};
+    fread(str_buffer, sizeof(str_buffer[0]), LOBI_PAGE_ADDR_BUFFER_LEN, fp);
 
     // Trim whitespace from input string
-    if (!str_trim(str_tr, str_buffer, str_len)) {
+    char str_tr[STR_CHARS(LOBI_PAGE_ADDR_BUFFER_LEN)] = {0};
+    if (!str_trim(str_tr, str_buffer, strlen(str_buffer))) {
         if (err) sprintf(err, "Failed to trim string");
-        goto exit;
+        return FAILURE_GENERAL_E;
     }
 
-    free(str_buffer);
-    str_buffer = NULL;
-
-    str_len = strlen(str_tr);
-    if (str_len > LOBI_PAGE_ADDR_LEN) {
-        if (err) sprintf(err, "Invalid page address given");
-        result = FAILURE_INPUT_E;
-        goto exit;
-    }
-
-    char addr[LOBI_PAGE_ADDR_LEN] = {0};
-    if (!str_copy(addr, str_tr, str_len)) {
-        if (err) sprintf(err, "Failed to copy string");
-        goto exit;
-    }
-
-    free(str_tr);
-    str_tr = NULL;
-
-    result = lobi_page_get(err, text, addr);
-    if (result != SUCCESS_E)
-        goto exit;
-
-    exit:
-    if (str_tr) free(str_tr);
-    if (str_buffer) free(str_buffer);
-    return result;
+    // Return result
+    return lobi_page_get(err, text, str_tr, strlen(str_tr));
 }
 
 /**
@@ -558,6 +534,21 @@ int main(int argc, char* argv[])
 
             // Output decoded bytes
             if (!output_bytes(err, bytes_da, out_stdout ? NULL : out_path))
+                goto exit;
+
+            success = true;
+            break;
+
+        case LOB_PAGE_SEARCH_EXACT_E:
+            // Find Library of Babel page matching content in given file
+            if (page_search_exact_fp(err, &string_da, in_fp) != SUCCESS_E)
+                goto exit;
+
+            fclose(in_fp);
+            in_fp = NULL;
+
+            // Output page address
+            if (!output_str(err, (char*)string_da.vals, out_stdout ? NULL : out_path))
                 goto exit;
 
             success = true;
