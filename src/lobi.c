@@ -9,6 +9,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/**
+ * Write cURL response body to dynamic array.
+ */
 static size_t curl_write_dynarr(char* ptr, size_t size, size_t nmemb, void* userdata)
 {
 	struct dynarr* da = userdata;
@@ -20,6 +23,15 @@ static size_t curl_write_dynarr(char* ptr, size_t size, size_t nmemb, void* user
 	return da->len - len_prev;
 }
 
+/**
+ * Initialize cURL handle for request to https://libraryofbabel.info.
+ *
+ * @param err Buffer to write error messages to.
+ * @param curl cURL handle to initialize.
+ * @param path URL path of request.
+ * @param len Length of URL path, excluding null-terminator.
+ * @param response_body Struct to output response body to.
+ */
 static CURL* curl_init_lobi(char* err, CURL** curl, const char* path, const size_t len, struct dynarr* response_body)
 {
 	#define URL_BASE "https://libraryofbabel.info"
@@ -34,7 +46,7 @@ static CURL* curl_init_lobi(char* err, CURL** curl, const char* path, const size
 		return NULL;
 	}
 
-	char* url = calloc(URL_BASE_LEN + len, sizeof(char));
+	char* url = calloc(STR_CHARS(URL_BASE_LEN + len), sizeof(char));
 	if (!url) {
 		if (err) sprintf(err, "Failed to allocate memory");
 		goto error;
@@ -61,6 +73,60 @@ static CURL* curl_init_lobi(char* err, CURL** curl, const char* path, const size
 	return NULL;
 }
 
+/**
+ * Validate Library of Babel page address.
+ *
+ * @param err Buffer to write error messages to.
+ * @param addr Page address to validate.
+ * @param len Length of page address, excluding null-terminator.
+ */
+static enum lobi_result lobi_page_addr_validate(char* err, const char* addr, const size_t len)
+{
+	if (len > LOBI_PAGE_ADDR_LEN) {
+		if (err) sprintf(err, "Page address exceeds maximum length (max %zu)", (size_t)LOBI_PAGE_ADDR_LEN);
+		return FAILURE_INPUT_E;
+	}
+
+	enum lobi_result result = FAILURE_GENERAL_E;
+	regex_t re_page_location;
+	char* addr_buffer = NULL;
+
+	// Build regex to validate page address format
+	if (regcomp(&re_page_location, "^[a-z0-9]{1,3260}-w[1-4]-s[1-5]-v((0[1-9])|([1-2][0-9])|(3[0-2])):0*(([1-3]?[0-9]{1,2})|(40[0-9])|(410))$", REG_EXTENDED | REG_NOSUB) != 0) {
+		if (err) sprintf(err, "Failed to build regex");
+		goto exit;
+	}
+
+	// Copy page address to buffer - regex.h has no method with parameter for input string
+	addr_buffer = calloc(STR_CHARS(len), sizeof(char));
+	if (!addr_buffer) {
+		if (err) sprintf(err, "Failed to allocate memory");
+		goto exit;
+	}
+	memcpy(addr_buffer, addr, len);
+
+	// Validate page address format using regex
+	if (regexec(&re_page_location, addr_buffer, 0, NULL, 0) != 0) {
+		if (err) sprintf(err, "Page address is invalid");
+		result = FAILURE_INPUT_E;
+		goto exit;
+	}
+
+	result = SUCCESS_E;
+
+	exit:
+	if (addr_buffer) free(addr_buffer);
+	regfree(&re_page_location);
+	return result;
+}
+
+/**
+ * Validate Library of Babel page content.
+ *
+ * @param err Buffer to write error messages to.
+ * @param text Page content to validate.
+ * @param len Length of page content, excluding null-terminator.
+ */
 static bool lobi_page_text_validate(char* err, const char* text, const size_t len)
 {
 	if (!text)
@@ -90,6 +156,16 @@ static bool lobi_page_text_validate(char* err, const char* text, const size_t le
 	return true;
 }
 
+/**
+ * Search Library of Babel for page with given content.
+ *
+ * @param err Buffer to write error messages to.
+ * @param addr Struct to output page address to, including null-terminator.
+ * @param text Page content to search for.
+ * @param len Length of page content, excluding null-terminator.
+ * @param result_title HTML to locate type of search result to return.
+ * @returns SUCCESS_E if page with exact given content was located, otherwise error value.
+ */
 static enum lobi_result lobi_page_search(char* err, struct dynarr* addr, const char* text, const size_t len, const char* result_title)
 {
 	#define SEARCH_URL_PATH "/search.cgi"
@@ -222,6 +298,16 @@ static enum lobi_result lobi_page_search(char* err, struct dynarr* addr, const c
 		html_ptr = &html_ptr[html_postform_param_len + SEARCH_HTML_POSTFORM_PARAM_SUFFIX_LEN];
 	}
 
+	// Ensure page address is null-terminated string
+	if (*(char*)dynarr_get(*addr, addr->len - 1) != '\0' && !dynarr_push(addr, &"\0", sizeof(char))) {
+		if (err) sprintf(err, "Failed to update dynamic array");
+		goto exit;
+	}
+
+	// Validate built page address
+	if (lobi_page_addr_validate(err, (char*)addr->vals, addr->len - 1) != SUCCESS_E)
+		goto exit;
+
 	result = SUCCESS_E;
 
 	exit:
@@ -238,46 +324,6 @@ static enum lobi_result lobi_page_search(char* err, struct dynarr* addr, const c
 enum lobi_result lobi_page_search_exact(char* err, struct dynarr* addr, const char* text, const size_t len)
 {
 	return lobi_page_search(err, addr, text, len, "<h3>exact match:</h3>");
-}
-
-static enum lobi_result lobi_page_addr_validate(char* err, const char* addr, const size_t len)
-{
-	if (len > LOBI_PAGE_ADDR_LEN) {
-		if (err) sprintf(err, "Page address exceeds maximum length (max %zu)", (size_t)LOBI_PAGE_ADDR_LEN);
-		return FAILURE_INPUT_E;
-	}
-
-	enum lobi_result result = FAILURE_GENERAL_E;
-	regex_t re_page_location;
-	char* addr_buffer = NULL;
-
-	// Build regex to validate page address format
-	if (regcomp(&re_page_location, "^[a-z0-9]{1,3260}-w[1-4]-s[1-5]-v((0[1-9])|([1-2][0-9])|(3[0-2])):0*(([1-3]?[0-9]{1,2})|(40[0-9])|(410))$", REG_EXTENDED | REG_NOSUB) != 0) {
-		if (err) sprintf(err, "Failed to build regex");
-		goto exit;
-	}
-
-	// Copy page address to buffer - regex.h has no method with parameter for input string
-	addr_buffer = calloc(STR_CHARS(len), sizeof(char));
-	if (!addr_buffer) {
-		if (err) sprintf(err, "Failed to allocate memory");
-		goto exit;
-	}
-	memcpy(addr_buffer, addr, len);
-
-	// Validate page address format using regex
-	if (regexec(&re_page_location, addr_buffer, 0, NULL, 0) != 0) {
-		if (err) sprintf(err, "Page address is invalid");
-		result = FAILURE_INPUT_E;
-		goto exit;
-	}
-
-	result = SUCCESS_E;
-
-	exit:
-	if (addr_buffer) free(addr_buffer);
-	regfree(&re_page_location);
-	return result;
 }
 
 enum lobi_result lobi_page_get(char* err, struct dynarr* text, const char* addr, const size_t len)
@@ -361,6 +407,16 @@ enum lobi_result lobi_page_get(char* err, struct dynarr* text, const char* addr,
 			goto exit;
 		}
 	}
+
+	// Ensure page content is null-terminated string
+	if (*(char*)dynarr_get(*text, text->len - 1) != '\0' && !dynarr_push(text, &"\0", sizeof(char))) {
+		if (err) sprintf(err, "Failed to update dynamic array");
+		goto exit;
+	}
+
+	// Validate built page content
+	if (!lobi_page_text_validate(err, (char*)text->vals, text->len - 1))
+		goto exit;
 
 	result = SUCCESS_E;
 
