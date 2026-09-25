@@ -1,3 +1,5 @@
+#define _XOPEN_SOURCE 600
+
 #include "lobi.h"
 
 #include "str.h"
@@ -92,7 +94,7 @@ static enum lobi_result lobi_page_addr_validate(char* err, const char* addr, con
 	char* addr_buffer = NULL;
 
 	// Build regex to validate page address format
-	if (regcomp(&re_page_location, "^[a-z0-9]{1,3260}-w[1-4]-s[1-5]-v((0[1-9])|([1-2][0-9])|(3[0-2])):0*(([1-3]?[0-9]{1,2})|(40[0-9])|(410))$", REG_EXTENDED | REG_NOSUB) != 0) {
+	if (regcomp(&re_page_location, "^[a-z0-9]{1,3260}-w[1-4]-s[1-5]-v(0[1-9]|[1-2][0-9]|3[0-2]):0*([1-9]|[1-9][0-9]|[1-3][0-9]{2}|40[0-9]|410)$", REG_EXTENDED | REG_NOSUB) != 0) {
 		if (err) sprintf(err, "Failed to build regex");
 		goto exit;
 	}

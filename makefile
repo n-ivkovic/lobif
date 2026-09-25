@@ -38,7 +38,7 @@ PERMEXE    = 755
 
 # Phony targets
 
-.PHONY: default clean help test test-encoding
+.PHONY: default clean help test
 
 default: $(BINDIR)/$(BIN)
 
@@ -57,10 +57,8 @@ help:
 	@echo " $@       Display help"
 	@echo
 
-test: test-encoding
-
-test-encoding: $(BINDIR)/$(BIN)
-	-$(TESTDIR)/encoding/test.sh $(BINDIR)/$(BIN)
+test: $(BINDIR)/$(BIN)
+	-$(TESTDIR)/test.sh $(BINDIR)/$(BIN)
 
 # Compiled file targets
 
