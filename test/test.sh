@@ -14,6 +14,99 @@ _term_color() {
 	tput setaf "$1" 2>/dev/null || printf "%b[3%sm" "\033" "$1"
 }
 
+
+# Execute file read/write tests
+# $1 path to executable file
+# $2 base path of all tests
+# $total_count
+# $passed_count
+# $failed_count
+# $failed_names
+_test_file() {
+	pos_path="${2}/file/positive"
+	neg_path="${2}/file/negative"
+	data_ext='.src'
+	addr_ext='.addr'
+	in_ext='.in'
+	err_ext='.err'
+
+	# Execute positive encode + decode tests
+	pos_data_files="$(find "$pos_path" -type f -name "*${data_ext}")"
+	for data_file in $pos_data_files; do
+		test_name="$(basename "$data_file" | sed "s/${data_ext}\$//")"
+
+		# Find files containing encoded results
+		addr_files="$(find "$pos_path" -type f -name "${test_name}.*${addr_ext}")"
+		[ -z "$addr_files" ] && _exit_err 3 "${data_file}: No accompanying ${addr_ext} files found"
+
+		# Arrange - Get expected stdout of read
+		read_expected="$(cat "$data_file")"
+
+		for addr_file in $addr_files; do
+			total_count=$((total_count + 2))
+
+			# Arrange - Get exe arguments from name of file containing Library of Babel page address - expected to be "{test_name}.{encoding}.addr"
+			encoding="$(basename "$addr_file" | sed "s/${addr_ext}\$//;s/^${test_name}\.//")"
+
+			# Arrange - Get expected stdout of write
+			write_expected="$(cat "$addr_file")"
+
+			# Act - Execute and concat both stdout and stderr
+			write_result="$("$exe_path" write -e "$encoding" "$data_file" 2>&1)"
+			read_result="$("$exe_path" read -e "$encoding" "$addr_file" 2>&1)"
+
+			# Assert write
+			# - Execution should return expected stdout
+			# - Execution should return no stderr - any error should cause assertion to fail
+			if [ "$write_result" = "$write_expected" ]; then
+				passed_count=$((passed_count + 1))
+			else
+				failed_count=$((failed_count + 1))
+				failed_names="${failed_names}${pos_path}/${test_name}: write ${encoding}\n"
+			fi
+
+			# Assert read
+			# - Execution should return expected stdout
+			# - Execution should return no stderr - any error should cause assertion to fail
+			if [ "$read_result" = "$read_expected" ]; then
+				passed_count=$((passed_count + 1))
+			else
+				failed_count=$((failed_count + 1))
+				failed_names="${failed_names}${pos_path}/${test_name}: decode ${encoding}\n"
+			fi
+		done
+	done
+
+	# Execute negative page search + get tests
+	neg_in_files="$(find "$neg_path" -type f -name "*${in_ext}")"
+	for in_file in $neg_in_files; do
+		total_count=$((total_count + 1))
+
+		# Arrange - Find file containing expected stderr
+		err_file="$(printf "%s" "$in_file" | sed "s/${in_ext}\$/${err_ext}/")"
+		! [ -f "$err_file" ] && _exit_err 3 "${in_file}: No accompanying ${err_ext} file found"
+
+		# Arrange - Get exe arguments from path of file containing input - expected to be "{operation}/{test_name}.in"
+		operation="$(basename "$(dirname "$in_file")")"
+
+		# Arrange - Get expected stderr
+		err_expected="$(cat "$err_file")"
+
+		# Act - Execute and concat both stdout and stderr
+		exe_result="$("$exe_path" "$operation" "$in_file" 2>&1)"
+
+		# Assert
+		# - Execution should return expected stderr
+		# - Execution should return no stdout - any output should cause assertion to fail
+		if [ "$exe_result" = "$err_expected" ]; then
+			passed_count=$((passed_count + 1))
+		else
+			failed_count=$((failed_count + 1))
+			failed_names="${failed_names}${neg_path}/${operation}/$(basename "$in_file" | sed "s/${in_ext}\$//")\n"
+		fi
+	done
+}
+
 # Execute encoding tests
 # $1 path to executable file
 # $2 base path of all tests
@@ -34,19 +127,21 @@ _test_encoding() {
 	for decoded_file in $pos_decoded_files; do
 		test_name="$(basename "$decoded_file" | sed "s/${decoded_ext}\$//")"
 
-		# Find files storing encoded results
+		# Find files containing encoded results
 		encoded_files="$(find "$pos_path" -type f -name "${test_name}.*${encoded_ext}")"
 		[ -z "$encoded_files" ] && _exit_err 3 "${decoded_file}: No accompanying ${encoded_ext} files found"
+
+		# Arrange - Get expected stdout of decode
+		decode_expected="$(cat "$decoded_file")"
 
 		for encoded_file in $encoded_files; do
 			total_count=$((total_count + 2))
 
-			# Arrange - Get exe arguments (encoding) from .enc file name - expected to be "{test_name}.{encoding}.enc"
+			# Arrange - Get exe arguments from name of file containing encoded result - expected to be "{test_name}.{encoding}.enc"
 			encoding="$(basename "$encoded_file" | sed "s/${encoded_ext}\$//;s/^${test_name}\.//")"
 
-			# Arrange - Get expected stdouts
+			# Arrange - Get expected stdout of encode
 			encode_expected="$(cat "$encoded_file")"
-			decode_expected="$(cat "$decoded_file")"
 
 			# Act - Execute and concat both stdout and stderr
 			encode_result="$("$exe_path" encode -e "$encoding" "$decoded_file" 2>&1)"
@@ -79,11 +174,11 @@ _test_encoding() {
 	for in_file in $neg_in_files; do
 		total_count=$((total_count + 1))
 
-		# Arrange - Find file storing expected stderr
+		# Arrange - Find file containing expected stderr
 		err_file="$(printf "%s" "$in_file" | sed "s/${in_ext}\$/${err_ext}/")"
 		! [ -f "$err_file" ] && _exit_err 3 "${in_file}: No accompanying ${err_ext} file found"
 
-		# Arrange - Get exe arguments from .in file path - expected to be "{encoding}/{operation}/{test_name}.in"
+		# Arrange - Get exe arguments from path of file containing input - expected to be "{encoding}/{operation}/{test_name}.in"
 		in_path="$(dirname "$in_file")"
 		operation="$(basename "$in_path")"
 		encoding="$(basename "$(dirname "$in_path")")"
@@ -125,11 +220,11 @@ _test_page() {
 	pos_text_files="$(find "$pos_path" -type f -name "*${text_ext}")"
 	for text_file in $pos_text_files; do
         total_count=$((total_count + 2))
-        
+
         # Arrange - Get test name
 		test_name="$(basename "$text_file" | sed "s/${text_ext}\$//")"
 
-        # Arrange - Find file storing expected page adddress
+        # Arrange - Find file containing expected page adddress
 		addr_file="$(printf "%s" "$text_file" | sed "s/${text_ext}\$/${addr_ext}/")"
 		! [ -f "$addr_file" ] && _exit_err 3 "${text_file}: No accompanying ${addr_ext} file found"
 
@@ -167,11 +262,11 @@ _test_page() {
 	for in_file in $neg_in_files; do
 		total_count=$((total_count + 1))
 
-		# Arrange - Find file storing expected stderr
+		# Arrange - Find file containing expected stderr
 		err_file="$(printf "%s" "$in_file" | sed "s/${in_ext}\$/${err_ext}/")"
 		! [ -f "$err_file" ] && _exit_err 3 "${in_file}: No accompanying ${err_ext} file found"
 
-		# Arrange - Get exe arguments from .in file path - expected to be "{operation}/{test_name}.in"
+		# Arrange - Get exe arguments from path of file containing input - expected to be "{operation}/{test_name}.in"
 		operation="$(basename "$(dirname "$in_file")")"
 
 		# Arrange - Get expected stderr
@@ -236,6 +331,8 @@ passed_count=0
 failed_count=0
 failed_names=
 
+# Execute tests
+_test_file "$exe_path" "$base_path"
 _test_encoding "$exe_path" "$base_path"
 _test_page "$exe_path" "$base_path"
 
