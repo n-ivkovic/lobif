@@ -12,8 +12,8 @@
 #define B28_CHARS_LEN 28
 
 /**
- * Calculate number of blocks to encode a given number of bytes as a Babel28 string.
- * 
+ * Calculate number of blocks required to encode a given number of bytes as a Babel28 string.
+ *
  * @param blocks Number of blocks to encode.
  * @param padding Length of padding applied to last block to encode.
  * @param n Number of bytes to encode.
@@ -40,8 +40,6 @@ bool b28_encode(struct dynarr* str, const void* bytes, const size_t n)
 	if (!str || !bytes)
 		return false;
 
-	static const char null = '\0';
-
 	bool success = false;
 
 	size_t blocks, padding;
@@ -58,7 +56,7 @@ bool b28_encode(struct dynarr* str, const void* bytes, const size_t n)
 			block_chars_len -= padding;
 
 		// Build value equivalent to reading all bytes in block as a single big-endian value
-		// Pad value with null bytes if not enough to fill block 
+		// Pad value with null bytes if not enough to fill block
 		// E.g.
 		// 0x48 0x65 0x6C -> 0x48656C
 		// 0x6C 0x6F      -> 0x6C6F00
@@ -76,7 +74,7 @@ bool b28_encode(struct dynarr* str, const void* bytes, const size_t n)
 		for (int block_char_ind = B28_CHARS_PER_BLOCK - 1; block_char_ind >= 0; block_char_ind--) {
 			if ((size_t)block_char_ind < block_chars_len)
 				block_chars[block_char_ind] = B28_CHARS[block_val % B28_CHARS_LEN];
-			
+
 			block_val /= B28_CHARS_LEN;
 		}
 
@@ -88,15 +86,15 @@ bool b28_encode(struct dynarr* str, const void* bytes, const size_t n)
 	success = true;
 
 	exit:
-	
+
 	// Append null-terminator
-	if (!dynarr_push(str, &null, sizeof(null)))
+	if (!dynarr_push(str, &"\0", sizeof(char)))
 		success = false;
 
 	return success;
 }
 
-size_t b28_encode_len(const size_t n)
+size_t b28_encode_chars(const size_t n)
 {
 	size_t blocks, padding;
 	b28_encode_calc_blocks(&blocks, &padding, n);
@@ -106,7 +104,7 @@ size_t b28_encode_len(const size_t n)
 
 /**
  * Calculate number of blocks to decode from a Babel28 string of a given length.
- * 
+ *
  * @param blocks Number of blocks to decode.
  * @param padding Length of padding applied to last block to decode.
  * @param len Length of Babel28 string to decode, excluding null-terminator.
@@ -135,7 +133,7 @@ static bool b28_decode_calc_blocks(size_t* blocks, size_t* padding, const size_t
 
 /**
  * Get index of Babel28 char.
- * 
+ *
  * @param ch Char to get index of.
  * @returns Index of Babel28 char. -1 if invalid.
  */
@@ -177,7 +175,7 @@ bool b28_decode(struct dynarr* bytes, const char* str, const size_t len)
 
 		// Convert encoded chars to value equivalent to all block bytes as a single big-endian value.
 		// If the last block does not have enough chars, this indicates the block has padding applied.
-		// Convert last block with missing chars as if missing chars are 'z' 
+		// Convert last block with missing chars as if missing chars are 'z'
 		// E.g.
 		// "fsbsk" -> 0x48656C
 		// "jnsc" ("jnscz") -> 0x6C6F0B

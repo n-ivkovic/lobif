@@ -130,8 +130,6 @@ static bool encoding_parse(enum encoding* enc, const char* str, const size_t len
  */
 static bool encode(char* err, struct dynarr* str, const uint8_t* bytes, const size_t n, const enum encoding enc)
 {
-    #define ENCODE_ALLOC(str, n) dynarr_alloc(str, n, sizeof(char))
-
     if (!str) {
         if (err) sprintf(err, "Struct to output encoded string not given");
         return false;
@@ -143,7 +141,7 @@ static bool encode(char* err, struct dynarr* str, const uint8_t* bytes, const si
     switch (enc) {
         case BHEX_E:
             if (str_unalloc)
-                ENCODE_ALLOC(str, bhex_encode_len(n));
+                dynarr_alloc(str, bhex_encode_chars(n), sizeof(char)); // Failure to pre-allocate space is non-critical - not checking return result
 
             if (!bhex_encode(str, bytes, n)) {
                 if (err) sprintf(err, "Failed to encode input as BabelHex string");
@@ -155,7 +153,7 @@ static bool encode(char* err, struct dynarr* str, const uint8_t* bytes, const si
 
         case B28_E:
             if (str_unalloc)
-                ENCODE_ALLOC(str, b28_encode_len(n));
+                dynarr_alloc(str, b28_encode_chars(n), sizeof(char)); // Failure to pre-allocate space is non-critical - not checking return result
 
             if (!b28_encode(str, bytes, n)) {
                 if (err) sprintf(err, "Failed to encode input as Babel28 string");
@@ -189,8 +187,6 @@ static bool encode(char* err, struct dynarr* str, const uint8_t* bytes, const si
  */
 static bool decode(char* err, struct dynarr* bytes, const char* str, const size_t len, const enum encoding enc)
 {
-    #define DECODE_ALLOC(bytes, n) dynarr_alloc(bytes, n, sizeof(uint8_t))
-
     if (!bytes) {
         if (err) sprintf(err, "Struct to output decoded bytes not given");
         return false;
@@ -228,7 +224,7 @@ static bool decode(char* err, struct dynarr* bytes, const char* str, const size_
             }
 
             if (bytes_unalloc)
-                DECODE_ALLOC(bytes, bytes_n);
+                dynarr_alloc(bytes, bytes_n, sizeof(uint8_t)); // Failure to pre-allocate space is non-critical - not checking return result
 
             if (!bhex_decode(bytes, str_tr, str_tr_len)) {
                 if (err) sprintf(err, "Failed to decode BabelHex input");
@@ -245,7 +241,7 @@ static bool decode(char* err, struct dynarr* bytes, const char* str, const size_
             }
 
             if (bytes_unalloc)
-                DECODE_ALLOC(bytes, bytes_n);
+                dynarr_alloc(bytes, bytes_n, sizeof(uint8_t)); // Failure to pre-allocate space is non-critical - not checking return result
 
             if (!b28_decode(bytes, str_tr, str_tr_len)) {
                 if (err) sprintf(err, "Failed to decode Babel28 input");
@@ -546,8 +542,10 @@ int main(int argc, char* argv[])
             ;
             // Based on encoding to use, get max number of bytes that should be read from input file
             size_t bytes_n;
-            if (!decode_len(&bytes_n, LOBI_PAGE_TEXT_LEN, enc))
-                bytes_n = LOBI_PAGE_TEXT_LEN;
+            if (!decode_len(&bytes_n, LOBI_PAGE_TEXT_LEN, enc)) {
+                sprintf(err, "Cannot use encoding given: %d", enc);
+                goto exit;
+            }
 
             // Read bytes from input file
             if (!input_bytes(err, &bytes_da, bytes_n, in_path))

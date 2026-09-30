@@ -14,8 +14,6 @@ bool bhex_encode(struct dynarr* str, const void* bytes, const size_t n)
 	if (!str || !bytes)
 		return false;
 
-	static const char null = '\0';
-
 	bool success = false;
 
 	// Encode one byte at a time
@@ -32,15 +30,15 @@ bool bhex_encode(struct dynarr* str, const void* bytes, const size_t n)
 	success = true;
 
 	exit:
-	
+
 	// Append null-terminator
-	if (!dynarr_push(str, &null, sizeof(null)))
+	if (!dynarr_push(str, &"\0", sizeof(char)))
 		success = false;
 
 	return success;
 }
 
-size_t bhex_encode_len(const size_t n)
+size_t bhex_encode_chars(const size_t n)
 {
 	return STR_CHARS(n * BHEX_CHARS_PER_BYTE);
 }

@@ -19,9 +19,9 @@ bool b28_encode(struct dynarr* str, const void* bytes, const size_t n);
  * Get number of chars required to encode a given number of bytes as a Babel28 string.
  *
  * @param n Number of bytes to encode.
- * @returns Number of chars required to encode as Babel28 string, including null-terminator. 
+ * @returns Number of chars required to encode as Babel28 string, including null-terminator.
  */
-size_t b28_encode_len(const size_t n);
+size_t b28_encode_chars(const size_t n);
 
 /**
  * Decode bytes from Babel28 string.
@@ -34,9 +34,9 @@ size_t b28_encode_len(const size_t n);
 bool b28_decode(struct dynarr* bytes, const char* str, const size_t len);
 
 /**
- * Get number of bytes to decode from a Babel28 string of a given length.
+ * Get number of bytes that can be decoded from a Babel28 string of a given length.
  *
- * @param n Result to write number of bytes to decode from Babel28 string of given length.
+ * @param n Result to write number of bytes that can be decoded.
  * @param len Length of Babel28 string to decode, excluding null-terminator.
  * @returns Whether Babel28 string of given length can be decoded.
  */
