@@ -24,7 +24,7 @@ Please adhere to the following when contributing any C code:
 - Unless specified otherwise, contributions must conform to C99 exclusively.
 	- Do not utilize features removed from, marked as obsolete, or marked as optional in any newer versions of the language (C11, C23). I.e. do not utilize variable-length arrays (VLAs),  `complex.h`, trigraphs, or function declarations with empty parameter lists.
 	- Features available in new versions of the language may be utilized as long as either the functionality is optional or fallbacks conforming to C99 are implemented.
-- POSIX features may be utilized only in files where the `_XOPEN_SOURCE` macro is defined. POSIX features are limited to user interface files to keep the core logic of the project as portable as possible.
+- POSIX features may be utilized only in files where the `_XOPEN_SOURCE` macro is defined. Limit the usage of POSIX features to keep the project as portable as possible.
 
 ### Shell
 
