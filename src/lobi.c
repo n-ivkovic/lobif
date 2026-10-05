@@ -90,16 +90,16 @@ static enum lobi_result lobi_page_addr_validate(char* err, const char* addr, con
 	}
 
 	enum lobi_result result = FAILURE_GENERAL_E;
-	regex_t re_page_location;
+	regex_t re_page_addr;
 	char* addr_buffer = NULL;
 
 	// Build regex to validate page address format
-	if (regcomp(&re_page_location, "^[a-z0-9]{1,3260}-w[1-4]-s[1-5]-v(0[1-9]|[1-2][0-9]|3[0-2]):0*([1-9]|[1-9][0-9]|[1-3][0-9]{2}|40[0-9]|410)$", REG_EXTENDED | REG_NOSUB) != 0) {
+	if (regcomp(&re_page_addr, "^[a-z0-9]+-w[1-4]-s[1-5]-v(0[1-9]|[1-2][0-9]|3[0-2]):0*([1-9]|[1-9][0-9]|[1-3][0-9]{2}|40[0-9]|410)$", REG_EXTENDED | REG_NOSUB) != 0) {
 		if (err) sprintf(err, "Failed to build regex");
 		goto exit;
 	}
 
-	// Copy page address to buffer - regex.h has no method with parameter for input string
+	// Copy page address to buffer - regex.h has no method with parameter for input string length
 	addr_buffer = calloc(STR_CHARS(len), sizeof(char));
 	if (!addr_buffer) {
 		if (err) sprintf(err, "Failed to allocate memory");
@@ -107,8 +107,17 @@ static enum lobi_result lobi_page_addr_validate(char* err, const char* addr, con
 	}
 	memcpy(addr_buffer, addr, len);
 
+	// Validate length of hexagon section of page address
+	// Using /[a-z0-9]{1,LOBI_HEXAGON_ADDR_LEN}/ in regex adds ~100MB to heap usage
+	char* addr_dash_ptr = strstr(addr_buffer, "-");
+	if (!addr_dash_ptr || addr_dash_ptr == addr_buffer || ((addr_dash_ptr - addr_buffer) / sizeof(char)) > LOBI_HEXAGON_ADDR_LEN) {
+		if (err) sprintf(err, "Page address is invalid");
+		result = FAILURE_INPUT_E;
+		goto exit;
+	}
+
 	// Validate page address format using regex
-	if (regexec(&re_page_location, addr_buffer, 0, NULL, 0) != 0) {
+	if (regexec(&re_page_addr, addr_buffer, 0, NULL, 0) != 0) {
 		if (err) sprintf(err, "Page address is invalid");
 		result = FAILURE_INPUT_E;
 		goto exit;
@@ -118,7 +127,7 @@ static enum lobi_result lobi_page_addr_validate(char* err, const char* addr, con
 
 	exit:
 	if (addr_buffer) free(addr_buffer);
-	regfree(&re_page_location);
+	regfree(&re_page_addr);
 	return result;
 }
 
