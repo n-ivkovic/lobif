@@ -19,7 +19,7 @@
 #define ARG_STDOUT "-"
 
 #define FP_READ_MAX 0xFFFFF
-#define FP_READ_ADDR (LOBI_PAGE_ADDR_LEN + 0x10) // Address length + some buffer for whitespace
+#define FP_READ_PAGE_ADDR_STR (LOBI_PAGE_ADDR_STR_LEN + 0x10) // Address length + some buffer for whitespace
 
 #define DYNARR_STR(da) (char*)da.vals
 #define DYNARR_STR_LEN(da) (da.len - 1)
@@ -407,6 +407,22 @@ static char* input_str(char* err, struct dynarr* str, const size_t len, bool tri
 	return result;
 }
 
+static bool input_page_addr(char* err, struct lobi_page_addr* addr, const char* path)
+{
+	bool success = false;
+
+	struct dynarr str = {0};
+
+	if (!input_str(err, &str, FP_READ_PAGE_ADDR_STR, true, path))
+		goto exit;
+
+	success = lobi_page_addr_parse_str(err, addr, DYNARR_STR(str), DYNARR_STR_LEN(str)) == SUCCESS_E;
+
+	exit:
+	dynarr_empty(&str);
+	return success;
+}
+
 /**
  * Write bytes to output path.
  *
@@ -459,6 +475,21 @@ static bool output_str(char* err, const char* str, const char* path)
 	return true;
 }
 
+static bool output_page_addr(char* err, const struct lobi_page_addr addr, const char* path)
+{
+	bool success = false;
+
+	struct dynarr str = {0};
+	if (lobi_page_addr_fmt_str(err, &str, addr) != SUCCESS_E)
+		goto exit;
+
+	success = output_str(err, str.vals, path);
+
+	exit:
+	dynarr_empty(&str);
+	return success;
+}
+
 int main(int argc, char* argv[])
 {
 	bool success = false;
@@ -471,7 +502,7 @@ int main(int argc, char* argv[])
 
 	struct dynarr bytes_da = {0};
 	struct dynarr string_da = {0};
-	struct dynarr addr_da = {0};
+	struct lobi_page_addr page_addr = {0};
 
 	if (argc < 2) {
 		sprintf(err, "No operation given");
@@ -558,11 +589,11 @@ int main(int argc, char* argv[])
 			// Find Library of Babel page whose content matches encoded string
 			size_t string_len = DYNARR_STR_LEN(string_da);
 			string_len = string_len > LOBI_PAGE_TEXT_LEN ? LOBI_PAGE_TEXT_LEN : string_len;
-			if (lobi_page_search_exact(err, &addr_da, DYNARR_STR(string_da), string_len) != SUCCESS_E)
+			if (lobi_page_search_exact(err, &page_addr, DYNARR_STR(string_da), string_len) != SUCCESS_E)
 				goto exit;
 
 			// Output Library of Babel page address
-			if (!output_str(err, DYNARR_STR(addr_da), out_path))
+			if (!output_page_addr(err, page_addr, out_path))
 				goto exit;
 
 			success = true;
@@ -570,11 +601,11 @@ int main(int argc, char* argv[])
 
 		case PAGE_GET_DECODE_E:
 			// Read Library of Babel page address from input file
-			if (!input_str(err, &addr_da, FP_READ_ADDR, true, in_path))
+			if (!input_page_addr(err, &page_addr, in_path))
 				goto exit;
 
 			// Get content of Library of Babel page at given address
-			if (lobi_page_get(err, &string_da, DYNARR_STR(addr_da), DYNARR_STR_LEN(addr_da)) != SUCCESS_E)
+			if (lobi_page_get(err, &string_da, page_addr) != SUCCESS_E)
 				goto exit;
 
 			// Decode Library of Babel page content
@@ -594,11 +625,11 @@ int main(int argc, char* argv[])
 				goto exit;
 
 			// Find Library of Babel page whose content matches given string
-			if (lobi_page_search_exact(err, &addr_da, DYNARR_STR(string_da), DYNARR_STR_LEN(string_da)) != SUCCESS_E)
+			if (lobi_page_search_exact(err, &page_addr, DYNARR_STR(string_da), DYNARR_STR_LEN(string_da)) != SUCCESS_E)
 				goto exit;
 
 			// Output Library of Babel page address
-			if (!output_str(err, DYNARR_STR(addr_da), out_path))
+			if (!output_page_addr(err, page_addr, out_path))
 				goto exit;
 
 			success = true;
@@ -606,11 +637,11 @@ int main(int argc, char* argv[])
 
 		case PAGE_GET_E:
 			// Read Library of Babel page address from input file
-			if (!input_str(err, &addr_da, FP_READ_ADDR, true, in_path))
+			if (!input_page_addr(err, &page_addr, in_path))
 				goto exit;
 
 			// Get content of Library of Babel page at given address
-			if (lobi_page_get(err, &string_da, DYNARR_STR(addr_da), DYNARR_STR_LEN(addr_da)) != SUCCESS_E)
+			if (lobi_page_get(err, &string_da, page_addr) != SUCCESS_E)
 				goto exit;
 
 			// Output Library of Babel page content
@@ -666,7 +697,6 @@ int main(int argc, char* argv[])
 			fprintf(stderr, "%s", EOL);
 	}
 
-	dynarr_empty(&addr_da);
 	dynarr_empty(&string_da);
 	dynarr_empty(&bytes_da);
 	return success ? EXIT_SUCCESS : EXIT_FAILURE;

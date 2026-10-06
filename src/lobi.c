@@ -1,15 +1,359 @@
-#define _XOPEN_SOURCE 600
-
 #include "lobi.h"
 
 #include "str.h"
 
 #include <curl/curl.h>
-#include <regex.h>
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define LOBI_PAGE_ADDR_WALL_MAX 4
+#define LOBI_PAGE_ADDR_SHELF_MAX 5
+#define LOBI_PAGE_ADDR_VOLUME_MAX 32
+#define LOBI_PAGE_ADDR_PAGE_MAX 410
+#define LOBI_PAGE_ADDR_STR_LEN_MIN 13 // "0-w1-s1-v01:1"
+
+#define LOBI_PAGE_ADDR_PARTS 5
+
+enum lobi_page_addr_parts {
+	HEXAGON_E,
+	WALL_E,
+	SHELF_E,
+	VOLUME_E,
+	PAGE_E
+};
+
+static const char lobi_page_addr_part_suffixes[LOBI_PAGE_ADDR_PARTS][3] = {"-w", "-s", "-v", ":", ""};
+
+/**
+ * Parse and validate unsigned integer from string.
+ */
+static bool parse_uint(unsigned int* uint, const char* str, const size_t len, const unsigned int min, const unsigned int max)
+{
+	if (uint) *uint = 0;
+
+	if (!str)
+		return false;
+
+	bool success = false;
+
+	// Allocate space to ensure input is null-terminated
+	char* str_buffer = calloc(STR_CHARS(len), sizeof(char));
+	if (!str_buffer)
+		goto exit;
+
+	// Ensure input is null-terminated
+	snprintf(str_buffer, STR_CHARS(len), "%s", str);
+
+	errno = 0;
+	char* end;
+	long result = strtol(str_buffer, &end, 10);
+
+	if (str_buffer == end || errno == ERANGE)
+		goto exit;
+
+	if (result < (long)min || result > (long)max)
+		goto exit;
+
+	success = true;
+	if (uint) *uint = (unsigned int)result;
+
+	exit:
+	if (str_buffer) free(str_buffer);
+	return success;
+}
+
+/**
+ * Parse and validate unsigned char from string.
+ */
+static bool parse_uchar(unsigned char* uchar, const char* str, const size_t len, const unsigned char min, const unsigned char max)
+{
+	unsigned int result = 0;
+	if (!parse_uint(&result, str, len, min, max))
+		return false;
+
+	if (uchar) *uchar = (unsigned char)result;
+	return true;
+}
+
+/**
+ * Parse and validate wall number of Library of Babel page address.
+ */
+static inline bool lobi_page_addr_wall_parse_str(unsigned char* wall, const char* str, const size_t len)
+{
+	return parse_uchar(wall, str, len, 1, LOBI_PAGE_ADDR_WALL_MAX);
+}
+
+/**
+ * Parse and validate shelf number of Library of Babel page address.
+ */
+static inline bool lobi_page_addr_shelf_parse_str(unsigned char* shelf, const char* str, const size_t len)
+{
+	return parse_uchar(shelf, str, len, 1, LOBI_PAGE_ADDR_SHELF_MAX);
+}
+
+/**
+ * Parse and validate volume number of Library of Babel page address.
+ */
+static inline bool lobi_page_addr_volume_parse_str(unsigned char* volume, const char* str, const size_t len)
+{
+	return parse_uchar(volume, str, len, 1, LOBI_PAGE_ADDR_VOLUME_MAX);
+}
+
+/**
+ * Parse and validate page number of Library of Babel page address.
+ */
+static inline bool lobi_page_addr_page_parse_str(unsigned int* page, const char* str, const size_t len)
+{
+	return parse_uint(page, str, len, 1, LOBI_PAGE_ADDR_PAGE_MAX);
+}
+
+/**
+ * Validate Library of Babel hexagon address.
+ */
+static bool lobi_hexagon_addr_validate(char* err, const char* hex, const size_t len)
+{
+	if (!hex)
+		return false;
+
+	if (len > LOBI_HEXAGON_ADDR_LEN) {
+		if (err) sprintf(err, "Hexagon address exceeds maximum length (max %zu)", (size_t)LOBI_HEXAGON_ADDR_LEN);
+		return false;
+	}
+
+	if (len < 1) {
+		if (err) sprintf(err, "Hexagon address is below minimum length (min 1)");
+		return false;
+	}
+
+	for (size_t ind = 0; ind < len && hex[ind]; ind++) {
+		if (hex[ind] >= 'a' && hex[ind] <= 'z')
+			continue;
+
+		if (hex[ind] >= '0' && hex[ind] <= '9')
+			continue;
+
+		if (err) sprintf(err, "Hexagon address contains invalid character at position %zu", ind);
+		return false;
+	}
+
+	return true;
+}
+
+enum lobi_result lobi_page_addr_parse_str(char* err, struct lobi_page_addr* addr, const char* str, const size_t len)
+{
+	if (!addr) {
+		if (err) sprintf(err, "No struct to output page address given");
+		return FAILURE_INPUT_E;
+	}
+
+	if (!str) {
+		if (err) sprintf(err, "No input string given");
+		return FAILURE_INPUT_E;
+	}
+
+	if (len > LOBI_PAGE_ADDR_STR_LEN) {
+		if (err) sprintf(err, "Page address exceeds maximum length (max %zu)", (size_t)LOBI_PAGE_ADDR_STR_LEN);
+		return FAILURE_INPUT_E;
+	}
+
+	if (len < LOBI_PAGE_ADDR_STR_LEN_MIN) {
+		if (err) sprintf(err, "Page address is below minimum length (min %zu)", (size_t)LOBI_PAGE_ADDR_STR_LEN_MIN);
+		return FAILURE_INPUT_E;
+	}
+
+	enum lobi_result result = FAILURE_GENERAL_E;
+
+	// Allocate space to ensure input is null-terminated
+	char* str_buffer = calloc(STR_CHARS(len), sizeof(char));
+	if (!str_buffer) {
+		if (err) sprintf(err, "Failed to allocate memory");
+		goto exit;
+	}
+
+	// Ensure input is null-terminated
+	snprintf(str_buffer, STR_CHARS(len), "%s", str);
+
+	// Loop through page address parts of formatted string
+	char* addr_part_ptr = str_buffer;
+	for (enum lobi_page_addr_parts page_addr_part = 0; page_addr_part < LOBI_PAGE_ADDR_PARTS; page_addr_part++) {;
+		// Get suffix of page address part / prefix of next page address part
+		const char* addr_part_suffix = lobi_page_addr_part_suffixes[page_addr_part];
+		size_t addr_part_suffix_len = strlen(addr_part_suffix);
+
+		// Use number of chars to page address suffix as length of page address part
+		size_t addr_part_len = 0;
+		if (addr_part_suffix_len > 0) {
+			char* addr_part_suffix_ptr = strstr(addr_part_ptr, addr_part_suffix);
+			if (addr_part_suffix_ptr)
+				addr_part_len = addr_part_suffix_ptr - addr_part_ptr;
+		} else {
+			addr_part_len = strlen(addr_part_ptr);
+		}
+
+		// Parse + validate page address part
+		switch (page_addr_part) {
+			case HEXAGON_E:
+				if (!lobi_hexagon_addr_validate(NULL, addr_part_ptr, addr_part_len)) {
+					if (err) sprintf(err, "Hexagon address of page address is invalid");
+					result = FAILURE_INPUT_E;
+					goto exit;
+				}
+
+				addr->hexagon_len = addr_part_len;
+				snprintf(addr->hexagon, STR_CHARS(addr_part_len), "%s", addr_part_ptr);
+				break;
+
+			case WALL_E:
+				if (!lobi_page_addr_wall_parse_str(&addr->wall, addr_part_ptr, addr_part_len)) {
+					if (err) sprintf(err, "Wall number of page address is invalid");
+					result = FAILURE_INPUT_E;
+					goto exit;
+				}
+				break;
+
+			case SHELF_E:
+				if (!lobi_page_addr_shelf_parse_str(&addr->shelf, addr_part_ptr, addr_part_len)) {
+					if (err) sprintf(err, "Shelf number of page address is invalid");
+					result = FAILURE_INPUT_E;
+					goto exit;
+				}
+				break;
+
+			case VOLUME_E:
+				if (!lobi_page_addr_volume_parse_str(&addr->volume, addr_part_ptr, addr_part_len)) {
+					if (err) sprintf(err, "Volume number of page address is invalid");
+					result = FAILURE_INPUT_E;
+					goto exit;
+				}
+				break;
+
+			case PAGE_E:
+				if (!lobi_page_addr_page_parse_str(&addr->page, addr_part_ptr, addr_part_len)) {
+					if (err) sprintf(err, "Page number of page address is invalid");
+					result = FAILURE_INPUT_E;
+					goto exit;
+				}
+				break;
+
+			default:
+				if (err) sprintf(err, "Unknown page address part: %d", page_addr_part);
+				goto exit;
+		}
+
+		// Advance pointer to next page address part
+		addr_part_ptr = &addr_part_ptr[addr_part_len + addr_part_suffix_len];
+	}
+
+	result = SUCCESS_E;
+
+	exit:
+	if (str_buffer) free(str_buffer);
+	return result;
+}
+
+/**
+ * Output Library of Babel page address to string format.
+ *
+ * @param str Buffer to write formatted string to, including null-terminator.
+ * @param addr Page address to format.
+ * @returns Length of formatted string, excluding null-terminator.
+ */
+static size_t lobi_page_addr_sprint(char* str, const struct lobi_page_addr addr)
+{
+	if (!str)
+		return 0;
+
+	size_t str_len = 0;
+	str_len += snprintf(&str[str_len], STR_CHARS(addr.hexagon_len), "%s", addr.hexagon);
+	str_len += snprintf(
+		&str[str_len],
+		STR_CHARS(LOBI_PAGE_ADDR_STR_LEN - addr.hexagon_len),
+		"%s%d%s%d%s%02d%s%d%s",
+		lobi_page_addr_part_suffixes[HEXAGON_E],
+		addr.wall,
+		lobi_page_addr_part_suffixes[WALL_E],
+		addr.shelf,
+		lobi_page_addr_part_suffixes[SHELF_E],
+		addr.volume,
+		lobi_page_addr_part_suffixes[VOLUME_E],
+		addr.page,
+		lobi_page_addr_part_suffixes[PAGE_E]
+	);
+
+	return str_len;
+}
+
+enum lobi_result lobi_page_addr_fmt_str(char* err, struct dynarr* str, const struct lobi_page_addr addr)
+{
+	if (!str) {
+		if (err) sprintf(err, "No struct to output string given");
+		return FAILURE_INPUT_E;
+	}
+
+	enum lobi_result result = FAILURE_GENERAL_E;
+	char* str_buffer = NULL;
+
+	// Allocate space to print formatted page address
+	str_buffer = calloc(STR_CHARS(LOBI_PAGE_ADDR_STR_LEN), sizeof(char));
+	if (!str_buffer) {
+		if (err) sprintf(err, "Failed to allocate memory");
+		goto exit;
+	}
+
+	// Print formatted page address
+	size_t str_buffer_len = lobi_page_addr_sprint(str_buffer, addr);
+
+	// Copy formatted page address to dynamic array
+	if (!dynarr_set(str, 0, str_buffer, STR_CHARS(str_buffer_len), sizeof(char))) {
+		if (err) sprintf(err, "Failed to update dynamic array");
+		goto exit;
+	}
+
+	result = SUCCESS_E;
+
+	exit:
+	if (str_buffer) free(str_buffer);
+	return result;
+}
+
+/**
+ * Validate Library of Babel page content.
+ *
+ * @param err Buffer to write error messages to.
+ * @param text Page content to validate.
+ * @param len Length of page content, excluding null-terminator.
+ */
+static bool lobi_page_text_validate(char* err, const char* text, const size_t len)
+{
+	if (!text)
+		return false;
+
+	if (len > LOBI_PAGE_TEXT_LEN) {
+		if (err) sprintf(err, "Page content exceeds maximum length (max %zu)", (size_t)LOBI_PAGE_TEXT_LEN);
+		return false;
+	}
+
+	if (len < 1) {
+		if (err) sprintf(err, "Page content is below minimum length (min 1)");
+		return false;
+	}
+
+	for (size_t ind = 0; ind < len && text[ind]; ind++) {
+		if (text[ind] >= 'a' && text[ind] <= 'z')
+			continue;
+
+		if (text[ind] == ' ' || text[ind] == ',' || text[ind] == '.')
+			continue;
+
+		if (err) sprintf(err, "Page content contains invalid character at position %zu", ind);
+		return false;
+	}
+
+	return true;
+}
 
 /**
  * Write cURL response body to dynamic array.
@@ -48,14 +392,16 @@ static CURL* curl_init_lobi(char* err, CURL** curl, const char* path, const size
 		return NULL;
 	}
 
+	// Allocate space to build request URL
 	char* url = calloc(STR_CHARS(URL_BASE_LEN + len), sizeof(char));
 	if (!url) {
 		if (err) sprintf(err, "Failed to allocate memory");
 		goto error;
 	}
 
+	// Build request URL
 	strcat(url, URL_BASE);
-	strncat(url, path, len);
+	snprintf(&url[URL_BASE_LEN], STR_CHARS(len), "%s", path);
 
 	curl_easy_setopt(*curl, CURLOPT_URL, url);
 	curl_easy_setopt(*curl, CURLOPT_USERAGENT, "lobi/1.0");
@@ -76,98 +422,6 @@ static CURL* curl_init_lobi(char* err, CURL** curl, const char* path, const size
 }
 
 /**
- * Validate Library of Babel page address.
- *
- * @param err Buffer to write error messages to.
- * @param addr Page address to validate.
- * @param len Length of page address, excluding null-terminator.
- */
-static enum lobi_result lobi_page_addr_validate(char* err, const char* addr, const size_t len)
-{
-	if (len > LOBI_PAGE_ADDR_LEN) {
-		if (err) sprintf(err, "Page address exceeds maximum length (max %zu)", (size_t)LOBI_PAGE_ADDR_LEN);
-		return FAILURE_INPUT_E;
-	}
-
-	enum lobi_result result = FAILURE_GENERAL_E;
-	regex_t re_page_addr;
-	char* addr_buffer = NULL;
-
-	// Build regex to validate page address format
-	if (regcomp(&re_page_addr, "^[a-z0-9]+-w[1-4]-s[1-5]-v(0[1-9]|[1-2][0-9]|3[0-2]):0*([1-9]|[1-9][0-9]|[1-3][0-9]{2}|40[0-9]|410)$", REG_EXTENDED | REG_NOSUB) != 0) {
-		if (err) sprintf(err, "Failed to build regex");
-		goto exit;
-	}
-
-	// Copy page address to buffer - regex.h has no method with parameter for input string length
-	addr_buffer = calloc(STR_CHARS(len), sizeof(char));
-	if (!addr_buffer) {
-		if (err) sprintf(err, "Failed to allocate memory");
-		goto exit;
-	}
-	memcpy(addr_buffer, addr, len);
-
-	// Validate length of hexagon section of page address
-	// Using /[a-z0-9]{1,LOBI_HEXAGON_ADDR_LEN}/ in regex adds ~100MB to heap usage
-	char* addr_dash_ptr = strstr(addr_buffer, "-");
-	if (!addr_dash_ptr || addr_dash_ptr == addr_buffer || ((addr_dash_ptr - addr_buffer) / sizeof(char)) > LOBI_HEXAGON_ADDR_LEN) {
-		if (err) sprintf(err, "Page address is invalid");
-		result = FAILURE_INPUT_E;
-		goto exit;
-	}
-
-	// Validate page address format using regex
-	if (regexec(&re_page_addr, addr_buffer, 0, NULL, 0) != 0) {
-		if (err) sprintf(err, "Page address is invalid");
-		result = FAILURE_INPUT_E;
-		goto exit;
-	}
-
-	result = SUCCESS_E;
-
-	exit:
-	if (addr_buffer) free(addr_buffer);
-	regfree(&re_page_addr);
-	return result;
-}
-
-/**
- * Validate Library of Babel page content.
- *
- * @param err Buffer to write error messages to.
- * @param text Page content to validate.
- * @param len Length of page content, excluding null-terminator.
- */
-static bool lobi_page_text_validate(char* err, const char* text, const size_t len)
-{
-	if (!text)
-		return false;
-
-	if (len > LOBI_PAGE_TEXT_LEN) {
-		if (err) sprintf(err, "Page content exceeds maximum length (max %zu)", (size_t)LOBI_PAGE_TEXT_LEN);
-		return false;
-	}
-
-	if (len < 1) {
-		if (err) sprintf(err, "Page content below minimum length (min 1)");
-		return false;
-	}
-
-	for (size_t ind = 0; ind < len && text[ind]; ind++) {
-		if (text[ind] >= 'a' && text[ind] <= 'z')
-			continue;
-
-		if (text[ind] == ' ' || text[ind] == ',' || text[ind] == '.')
-			continue;
-
-		if (err) sprintf(err, "Page content contains invalid character at position %zu", ind);
-		return false;
-	}
-
-	return true;
-}
-
-/**
  * Search Library of Babel for page with given content.
  *
  * @param err Buffer to write error messages to.
@@ -177,7 +431,7 @@ static bool lobi_page_text_validate(char* err, const char* text, const size_t le
  * @param result_title HTML to locate type of search result to return.
  * @returns SUCCESS_E if page with exact given content was located, otherwise error value.
  */
-static enum lobi_result lobi_page_search(char* err, struct dynarr* addr, const char* text, const size_t len, const char* result_title)
+static enum lobi_result lobi_page_search(char* err, struct lobi_page_addr* addr, const char* text, const size_t len, const char* result_title)
 {
 	#define SEARCH_URL_PATH "/search.cgi"
 	#define SEARCH_URL_PATH_LEN 11
@@ -190,12 +444,8 @@ static enum lobi_result lobi_page_search(char* err, struct dynarr* addr, const c
 	#define SEARCH_HTML_POSTFORM_PARAM_SUFFIX "'"
 	#define SEARCH_HTML_POSTFORM_PARAM_SUFFIX_LEN 1
 
-	#define PAGE_ADDR_PARTS 5
-
-	static const char page_addr_part_prefix[PAGE_ADDR_PARTS][3] = {"", "-w", "-s", "-v", ":"};
-
 	if (!addr) {
-		if (err) sprintf(err, "No dynamic array to output page address given");
+		if (err) sprintf(err, "No struct to output page address given");
 		return FAILURE_INPUT_E;
 	}
 
@@ -209,7 +459,7 @@ static enum lobi_result lobi_page_search(char* err, struct dynarr* addr, const c
 	// Init search cURL request
 	CURL* search_curl = NULL;
 	struct dynarr search_response_body = {0};
-	if (!curl_init_lobi(err, &search_curl, SEARCH_URL_PATH, SEARCH_URL_PATH_LEN / sizeof(char), &search_response_body))
+	if (!curl_init_lobi(err, &search_curl, SEARCH_URL_PATH, SEARCH_URL_PATH_LEN, &search_response_body))
 		goto exit;
 
 	// URI-escape text
@@ -262,6 +512,12 @@ static enum lobi_result lobi_page_search(char* err, struct dynarr* addr, const c
 	free(search_form);
 	search_form = NULL;
 
+	// Ensure response body is null-terminated string
+	if (*(char*)dynarr_get(search_response_body, search_response_body.len - 1) != '\0' && !dynarr_push(&search_response_body, &"\0", sizeof(char))) {
+		if (err) sprintf(err, "Failed to update dynamic array");
+		goto exit;
+	}
+
 	// Init HTML pointer at title of search result section
 	char* html_ptr = strstr(search_response_body.vals, result_title);
 	if (!html_ptr) {
@@ -280,44 +536,61 @@ static enum lobi_result lobi_page_search(char* err, struct dynarr* addr, const c
 	html_ptr = &html_ptr[SEARCH_HTML_POSTFORM_PREFIX_LEN - 1]; // -1 to point to '('
 
 	// Loop through postform() parameters to build page address
-	for (size_t addr_part_ind = 0; addr_part_ind < PAGE_ADDR_PARTS; addr_part_ind++) {
+	for (enum lobi_page_addr_parts page_addr_part = 0; page_addr_part < LOBI_PAGE_ADDR_PARTS; page_addr_part++) {
 		// Advance HTML pointer to start of parameter
 		html_ptr = &html_ptr[SEARCH_HTML_POSTFORM_PARAM_PREFIX_LEN];
 
-		// Get length of parameter
-		size_t html_postform_param_len = strcspn(html_ptr, SEARCH_HTML_POSTFORM_PARAM_SUFFIX);
+		// Use length of parameter as length of page address part
+		size_t addr_part_len = strcspn(html_ptr, SEARCH_HTML_POSTFORM_PARAM_SUFFIX);
 
-		// Get prefix for address part
-		const char* addr_part_prefix = page_addr_part_prefix[addr_part_ind];
-		size_t addr_part_prefix_len = strlen(addr_part_prefix);
+		// Parse + validate parameter as page address part
+		switch (page_addr_part) {
+			case HEXAGON_E:
+				if (!lobi_hexagon_addr_validate(NULL, html_ptr, addr_part_len)) {
+					if (err) sprintf(err, "Failed to parse hexagon address of page address");
+					goto exit;
+				}
 
-		// Append prefix for address part to result
-		if (addr_part_prefix_len > 0) {
-			if (!dynarr_set(addr, addr->len, addr_part_prefix, addr_part_prefix_len, sizeof(char))) {
-				if (err) sprintf(err, "Failed to update dynamic array");
+				addr->hexagon_len = addr_part_len;
+				snprintf(addr->hexagon, STR_CHARS(addr_part_len), "%s", html_ptr);
+				break;
+
+			case WALL_E:
+				if (!lobi_page_addr_wall_parse_str(&addr->wall, html_ptr, addr_part_len)) {
+					if (err) sprintf(err, "Failed to parse wall number of page address");
+					goto exit;
+				}
+				break;
+
+			case SHELF_E:
+				if (!lobi_page_addr_shelf_parse_str(&addr->shelf, html_ptr, addr_part_len)) {
+					if (err) sprintf(err, "Failed to parse shelf number of page address");
+					goto exit;
+				}
+				break;
+
+			case VOLUME_E:
+				if (!lobi_page_addr_volume_parse_str(&addr->volume, html_ptr, addr_part_len)) {
+					if (err) sprintf(err, "Failed to parse volume number of page address");
+					goto exit;
+				}
+				break;
+
+			case PAGE_E:
+				if (!lobi_page_addr_page_parse_str(&addr->page, html_ptr, addr_part_len)) {
+					if (err) sprintf(err, "Failed to parse page number of page address");
+					goto exit;
+				}
+				break;
+
+			default:
+				if (err) sprintf(err, "Unknown page address part: %d", page_addr_part);
 				goto exit;
-			}
-		}
-
-		// Use parameter value as address part and append to result
-		if (!dynarr_set(addr, addr->len, html_ptr, html_postform_param_len, sizeof(char))) {
-			if (err) sprintf(err, "Failed to update dynamic array");
-			goto exit;
 		}
 
 		// Advance pointer to end of parameter
-		html_ptr = &html_ptr[html_postform_param_len + SEARCH_HTML_POSTFORM_PARAM_SUFFIX_LEN];
+		html_ptr = &html_ptr[addr_part_len + SEARCH_HTML_POSTFORM_PARAM_SUFFIX_LEN];
 	}
-
-	// Ensure page address is null-terminated string
-	if (*(char*)dynarr_get(*addr, addr->len - 1) != '\0' && !dynarr_push(addr, &"\0", sizeof(char))) {
-		if (err) sprintf(err, "Failed to update dynamic array");
-		goto exit;
-	}
-
-	// Validate built page address
-	if (lobi_page_addr_validate(err, (char*)addr->vals, addr->len - 1) != SUCCESS_E)
-		goto exit;
 
 	result = SUCCESS_E;
 
@@ -332,12 +605,12 @@ static enum lobi_result lobi_page_search(char* err, struct dynarr* addr, const c
 	return result;
 }
 
-enum lobi_result lobi_page_search_exact(char* err, struct dynarr* addr, const char* text, const size_t len)
+enum lobi_result lobi_page_search_exact(char* err, struct lobi_page_addr* addr, const char* text, const size_t len)
 {
 	return lobi_page_search(err, addr, text, len, "<h3>exact match:</h3>");
 }
 
-enum lobi_result lobi_page_get(char* err, struct dynarr* text, const char* addr, const size_t len)
+enum lobi_result lobi_page_get(char* err, struct dynarr* text, const struct lobi_page_addr addr)
 {
 	#define PAGE_URL_PATH_BASE "/book.cgi?"
 	#define PAGE_URL_PATH_BASE_LEN 10
@@ -347,17 +620,12 @@ enum lobi_result lobi_page_get(char* err, struct dynarr* text, const char* addr,
 		return FAILURE_INPUT_E;
 	}
 
-	// Validate page address
-	enum lobi_result addr_validate_result = lobi_page_addr_validate(err, addr, len);
-	if (addr_validate_result != SUCCESS_E)
-		return addr_validate_result;
-
 	enum lobi_result result = FAILURE_GENERAL_E;
 
 	// Build page URL path
-	char url_path[PAGE_URL_PATH_BASE_LEN + LOBI_PAGE_ADDR_LEN] = {0};
+	char url_path[STR_CHARS(PAGE_URL_PATH_BASE_LEN + LOBI_PAGE_ADDR_STR_LEN)] = {0};
 	strcat(url_path, PAGE_URL_PATH_BASE);
-	strncat(url_path, addr, len);
+	lobi_page_addr_sprint(&url_path[PAGE_URL_PATH_BASE_LEN], addr);
 
 	// Init page cURL request
 	CURL* page_curl = NULL;
@@ -387,29 +655,38 @@ enum lobi_result lobi_page_get(char* err, struct dynarr* text, const char* addr,
 	curl_global_cleanup();
 	page_curl = NULL;
 
-	// Find start of first opening <PRE> tag - this element contains the page text
-	char* pre_text = strstr(page_response_body.vals, "<PRE");
-	if (!pre_text) {
+	// Ensure response body is null-terminated string
+	if (*(char*)dynarr_get(page_response_body, page_response_body.len - 1) != '\0' && !dynarr_push(&page_response_body, &"\0", sizeof(char))) {
+		if (err) sprintf(err, "Failed to update dynamic array");
+		goto exit;
+	}
+
+	// Advance HTML pointer to first <PRE> tag - this element contains the page text
+	char* html_ptr = strstr(page_response_body.vals, "<PRE");
+	if (!html_ptr) {
 		if (err) sprintf(err, "Failed to find expected HTML tag in HTTP response body");
 		goto exit;
 	}
 
-	// Find end of opening <PRE> tag
-	pre_text = strchr(pre_text, '>');
-	if (!pre_text) {
+	// Advance HTML pointer to end of opening <PRE> tag
+	html_ptr = strchr(html_ptr, '>');
+	if (!html_ptr) {
 		if (err) sprintf(err, "Failed to find expected HTML tag in HTTP response body");
 		goto exit;
 	}
 
-	// Get page text within opening <PRE> tag
-	pre_text = &pre_text[1];
+	// Advance HTML pointer to first char within <PRE> tag
+	html_ptr = &html_ptr[1];
 
-	// Get length of page text (up to closing </PRE> tag)
-	size_t page_text_len = strcspn(pre_text, "</");
+	// Use number of chars up to closing </PRE> tag as length <PRE> content length
+	size_t pre_text_len = 0;
+	char* pre_text_suffix = strstr(html_ptr, "</PRE");
+	if (pre_text_suffix)
+		pre_text_len = pre_text_suffix - html_ptr;
 
 	// Write page text to dynamic array
-	for (size_t pre_text_ind = 0; pre_text_ind < page_text_len; pre_text_ind++) {
-		char c = pre_text[pre_text_ind];
+	for (size_t pre_text_ind = 0; pre_text_ind < pre_text_len; pre_text_ind++) {
+		char c = html_ptr[pre_text_ind];
 		if (c == '\n')
 			continue;
 
