@@ -5,18 +5,25 @@
 #include <curl/curl.h>
 
 #include <errno.h>
+#include <math.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+#define LOBI_PAGE_ADDR_PARTS 5
 #define LOBI_PAGE_ADDR_WALL_MAX 4
 #define LOBI_PAGE_ADDR_SHELF_MAX 5
 #define LOBI_PAGE_ADDR_VOLUME_MAX 32
 #define LOBI_PAGE_ADDR_PAGE_MAX 410
-#define LOBI_PAGE_ADDR_STR_LEN_MIN 13 // "0-w1-s1-v01:1"
 
-#define LOBI_PAGE_ADDR_PARTS 5
+#define LOBI_PAGE_ADDR_BIN_OFFSET_MAX ((LOBI_PAGE_ADDR_WALL_MAX * LOBI_PAGE_ADDR_SHELF_MAX * LOBI_PAGE_ADDR_VOLUME_MAX * LOBI_PAGE_ADDR_PAGE_MAX) - 1)
+#define LOBI_ADDR_BIN_PAGE_SIZE_MIN 4
+#define LOBI_ADDR_STR_PAGE_LEN_MIN 13 // "0-w1-s1-v01:1"
 
+/**
+ * Sections of a Library of Babel page address.
+ */
 enum lobi_page_addr_parts {
 	HEXAGON_E,
 	WALL_E,
@@ -28,11 +35,11 @@ enum lobi_page_addr_parts {
 static const char lobi_page_addr_part_suffixes[LOBI_PAGE_ADDR_PARTS][3] = {"-w", "-s", "-v", ":", ""};
 
 /**
- * Parse and validate unsigned integer from string.
+ * Parse and validate unsigned short from string.
  */
-static bool parse_uint(unsigned int* uint, const char* str, const size_t len, const unsigned int min, const unsigned int max)
+static bool parse_ushort(unsigned short* ushort, const char* str, const size_t len, const unsigned short min, const unsigned short max)
 {
-	if (uint) *uint = 0;
+	if (ushort) *ushort = 0;
 
 	if (!str)
 		return false;
@@ -58,7 +65,7 @@ static bool parse_uint(unsigned int* uint, const char* str, const size_t len, co
 		goto exit;
 
 	success = true;
-	if (uint) *uint = (unsigned int)result;
+	if (ushort) *ushort = (unsigned short)result;
 
 	exit:
 	if (str_buffer) free(str_buffer);
@@ -70,8 +77,8 @@ static bool parse_uint(unsigned int* uint, const char* str, const size_t len, co
  */
 static bool parse_uchar(unsigned char* uchar, const char* str, const size_t len, const unsigned char min, const unsigned char max)
 {
-	unsigned int result = 0;
-	if (!parse_uint(&result, str, len, min, max))
+	unsigned short result = 0;
+	if (!parse_ushort(&result, str, len, min, max))
 		return false;
 
 	if (uchar) *uchar = (unsigned char)result;
@@ -105,9 +112,9 @@ static inline bool lobi_page_addr_volume_parse_str(unsigned char* volume, const 
 /**
  * Parse and validate page number of Library of Babel page address.
  */
-static inline bool lobi_page_addr_page_parse_str(unsigned int* page, const char* str, const size_t len)
+static inline bool lobi_page_addr_page_parse_str(unsigned short* page, const char* str, const size_t len)
 {
-	return parse_uint(page, str, len, 1, LOBI_PAGE_ADDR_PAGE_MAX);
+	return parse_ushort(page, str, len, 1, LOBI_PAGE_ADDR_PAGE_MAX);
 }
 
 /**
@@ -118,8 +125,8 @@ static bool lobi_hexagon_addr_validate(char* err, const char* hex, const size_t 
 	if (!hex)
 		return false;
 
-	if (len > LOBI_HEXAGON_ADDR_LEN) {
-		if (err) sprintf(err, "Hexagon address exceeds maximum length (max %zu)", (size_t)LOBI_HEXAGON_ADDR_LEN);
+	if (len > LOBI_ADDR_STR_HEXAGON_LEN) {
+		if (err) sprintf(err, "Hexagon address exceeds maximum length (max %zu)", (size_t)LOBI_ADDR_STR_HEXAGON_LEN);
 		return false;
 	}
 
@@ -145,7 +152,7 @@ static bool lobi_hexagon_addr_validate(char* err, const char* hex, const size_t 
 enum lobi_result lobi_page_addr_parse_str(char* err, struct lobi_page_addr* addr, const char* str, const size_t len)
 {
 	if (!addr) {
-		if (err) sprintf(err, "No struct to output page address given");
+		if (err) sprintf(err, "No struct to output Library of Babel page address given");
 		return FAILURE_INPUT_E;
 	}
 
@@ -154,13 +161,13 @@ enum lobi_result lobi_page_addr_parse_str(char* err, struct lobi_page_addr* addr
 		return FAILURE_INPUT_E;
 	}
 
-	if (len > LOBI_PAGE_ADDR_STR_LEN) {
-		if (err) sprintf(err, "Page address exceeds maximum length (max %zu)", (size_t)LOBI_PAGE_ADDR_STR_LEN);
+	if (len > LOBI_ADDR_STR_PAGE_LEN) {
+		if (err) sprintf(err, "Library of Babel page address length (%zu) exceeds maximum length (max %zu)", len, (size_t)LOBI_ADDR_STR_PAGE_LEN);
 		return FAILURE_INPUT_E;
 	}
 
-	if (len < LOBI_PAGE_ADDR_STR_LEN_MIN) {
-		if (err) sprintf(err, "Page address is below minimum length (min %zu)", (size_t)LOBI_PAGE_ADDR_STR_LEN_MIN);
+	if (len < LOBI_ADDR_STR_PAGE_LEN_MIN) {
+		if (err) sprintf(err, "Library of Babel page address length (%zu) is below minimum length (min %zu)", len, (size_t)LOBI_ADDR_STR_PAGE_LEN_MIN);
 		return FAILURE_INPUT_E;
 	}
 
@@ -197,7 +204,7 @@ enum lobi_result lobi_page_addr_parse_str(char* err, struct lobi_page_addr* addr
 		switch (page_addr_part) {
 			case HEXAGON_E:
 				if (!lobi_hexagon_addr_validate(NULL, addr_part_ptr, addr_part_len)) {
-					if (err) sprintf(err, "Hexagon address of page address is invalid");
+					if (err) sprintf(err, "Hexagon address of Library of Babel page address is invalid");
 					result = FAILURE_INPUT_E;
 					goto exit;
 				}
@@ -208,7 +215,7 @@ enum lobi_result lobi_page_addr_parse_str(char* err, struct lobi_page_addr* addr
 
 			case WALL_E:
 				if (!lobi_page_addr_wall_parse_str(&addr->wall, addr_part_ptr, addr_part_len)) {
-					if (err) sprintf(err, "Wall number of page address is invalid");
+					if (err) sprintf(err, "Wall number of Library of Babel page address is invalid");
 					result = FAILURE_INPUT_E;
 					goto exit;
 				}
@@ -216,7 +223,7 @@ enum lobi_result lobi_page_addr_parse_str(char* err, struct lobi_page_addr* addr
 
 			case SHELF_E:
 				if (!lobi_page_addr_shelf_parse_str(&addr->shelf, addr_part_ptr, addr_part_len)) {
-					if (err) sprintf(err, "Shelf number of page address is invalid");
+					if (err) sprintf(err, "Shelf number of Library of Babel page address is invalid");
 					result = FAILURE_INPUT_E;
 					goto exit;
 				}
@@ -224,7 +231,7 @@ enum lobi_result lobi_page_addr_parse_str(char* err, struct lobi_page_addr* addr
 
 			case VOLUME_E:
 				if (!lobi_page_addr_volume_parse_str(&addr->volume, addr_part_ptr, addr_part_len)) {
-					if (err) sprintf(err, "Volume number of page address is invalid");
+					if (err) sprintf(err, "Volume number of Library of Babel page address is invalid");
 					result = FAILURE_INPUT_E;
 					goto exit;
 				}
@@ -232,14 +239,14 @@ enum lobi_result lobi_page_addr_parse_str(char* err, struct lobi_page_addr* addr
 
 			case PAGE_E:
 				if (!lobi_page_addr_page_parse_str(&addr->page, addr_part_ptr, addr_part_len)) {
-					if (err) sprintf(err, "Page number of page address is invalid");
+					if (err) sprintf(err, "Page number of Library of Babel page address is invalid");
 					result = FAILURE_INPUT_E;
 					goto exit;
 				}
 				break;
 
 			default:
-				if (err) sprintf(err, "Unknown page address part: %d", page_addr_part);
+				if (err) sprintf(err, "Unknown Library of Babel page address part: %d", page_addr_part);
 				goto exit;
 		}
 
@@ -270,7 +277,7 @@ static size_t lobi_page_addr_sprint(char* str, const struct lobi_page_addr addr)
 	str_len += snprintf(&str[str_len], STR_CHARS(addr.hexagon_len), "%s", addr.hexagon);
 	str_len += snprintf(
 		&str[str_len],
-		STR_CHARS(LOBI_PAGE_ADDR_STR_LEN - addr.hexagon_len),
+		STR_CHARS(LOBI_ADDR_STR_PAGE_LEN - addr.hexagon_len),
 		"%s%d%s%d%s%02d%s%d%s",
 		lobi_page_addr_part_suffixes[HEXAGON_E],
 		addr.wall,
@@ -297,7 +304,7 @@ enum lobi_result lobi_page_addr_fmt_str(char* err, struct dynarr* str, const str
 	char* str_buffer = NULL;
 
 	// Allocate space to print formatted page address
-	str_buffer = calloc(STR_CHARS(LOBI_PAGE_ADDR_STR_LEN), sizeof(char));
+	str_buffer = calloc(STR_CHARS(LOBI_ADDR_STR_PAGE_LEN), sizeof(char));
 	if (!str_buffer) {
 		if (err) sprintf(err, "Failed to allocate memory");
 		goto exit;
@@ -317,6 +324,108 @@ enum lobi_result lobi_page_addr_fmt_str(char* err, struct dynarr* str, const str
 	exit:
 	if (str_buffer) free(str_buffer);
 	return result;
+}
+
+enum lobi_result lobi_page_addr_parse_bin(char* err, struct lobi_page_addr* addr, const void* bytes, const size_t n)
+{
+	if (!addr) {
+		if (err) sprintf(err, "No struct to output Library of Babel page address");
+		return FAILURE_INPUT_E;
+	}
+
+	if (!bytes) {
+		if (err) sprintf(err, "No input bytes given");
+		return FAILURE_INPUT_E;
+	}
+
+	if (n > LOBI_ADDR_BIN_PAGE_SIZE) {
+		if (err) sprintf(err, "Size of Library of Babel page address (%zu) exceeds maximum size (max %zu)", n, (size_t)LOBI_ADDR_BIN_PAGE_SIZE);
+		return FAILURE_INPUT_E;
+	}
+
+	if (n < LOBI_ADDR_BIN_PAGE_SIZE_MIN) {
+		if (err) sprintf(err, "Size of Library of Babel page address (%zu) is below minimum size (min %zu)", n, (size_t)LOBI_ADDR_BIN_PAGE_SIZE_MIN);
+		return FAILURE_INPUT_E;
+	}
+
+	// Obtain mixed radix wall-shelf-volume-page from number of pages offset from the start of the hexagon
+	// E.g. 107845 pages from hex-w1-s1-v01:1 = hex-w2-s4-v08:16
+
+	// TODO: Read offset as little-endian int regardless of system endianness
+	uint32_t hex_offset = *(uint32_t*)bytes;
+
+	if (hex_offset > LOBI_PAGE_ADDR_BIN_OFFSET_MAX) {
+		if (err) sprintf(err, "Hexagon page offset in Library of Babel page address (%d) exceeds maximum value (max %zu)", hex_offset, (size_t)LOBI_PAGE_ADDR_BIN_OFFSET_MAX);
+		return FAILURE_INPUT_E;
+	}
+
+	ldiv_t hex_offset_div = {0};
+
+	hex_offset_div = ldiv(hex_offset, LOBI_PAGE_ADDR_PAGE_MAX);
+	addr->page = hex_offset_div.rem + 1;
+	hex_offset = hex_offset_div.quot;
+
+	hex_offset_div = ldiv(hex_offset, LOBI_PAGE_ADDR_VOLUME_MAX);
+	addr->volume = hex_offset_div.rem + 1;
+	hex_offset = hex_offset_div.quot;
+
+	hex_offset_div = ldiv(hex_offset, LOBI_PAGE_ADDR_SHELF_MAX);
+	addr->shelf = hex_offset_div.rem + 1;
+	hex_offset = hex_offset_div.quot;
+
+	hex_offset_div = ldiv(hex_offset, LOBI_PAGE_ADDR_WALL_MAX);
+	addr->wall = hex_offset_div.rem + 1;
+	hex_offset = hex_offset_div.quot;
+
+	if (hex_offset > 0) {
+		if (err) sprintf(err, "Library of Babel page address is invalid");
+		return FAILURE_INPUT_E;
+	}
+
+	// TOOD: Actually implement
+	// Set hexagon to 0 for now
+	sprintf(addr->hexagon, "%s", "0");
+	addr->hexagon_len = 1;
+
+	return SUCCESS_E;
+}
+
+enum lobi_result lobi_page_addr_fmt_bin(char* err, struct dynarr* bytes, const struct lobi_page_addr addr)
+{
+	if (!bytes) {
+		if (err) sprintf(err, "No struct to output bytes given");
+		return FAILURE_INPUT_E;
+	}
+
+	// Convert mixed radix wall-shelf-volume-page to number of pages offset from the start of the hexagon
+	// E.g. hex-w2-s4-v08:16 = 107845 pages from hex-w1-s1-v01:1
+
+	unsigned int hex_offset_multi = 1;
+	uint32_t hex_offset = 0;
+
+	hex_offset += (addr.page - 1) * hex_offset_multi;
+	hex_offset_multi *= LOBI_PAGE_ADDR_PAGE_MAX;
+
+	hex_offset += (addr.volume - 1) * hex_offset_multi;
+	hex_offset_multi *= LOBI_PAGE_ADDR_VOLUME_MAX;
+
+	hex_offset += (addr.shelf - 1) * hex_offset_multi;
+	hex_offset_multi *= LOBI_PAGE_ADDR_SHELF_MAX;
+
+	hex_offset += (addr.wall - 1) * hex_offset_multi;
+
+	if (hex_offset > LOBI_PAGE_ADDR_BIN_OFFSET_MAX) {
+		if (err) sprintf(err, "Library of Babel page address is invalid");
+		return FAILURE_INPUT_E;
+	}
+
+	// TODO: Write offset as little-endian int regardless of system endianness
+	if (!dynarr_set(bytes, 0, &hex_offset, sizeof(hex_offset), 1)) {
+		if (err) sprintf(err, "Failed to update dynamic array");
+		return FAILURE_GENERAL_E;
+	}
+
+	return SUCCESS_E;
 }
 
 /**
@@ -445,7 +554,7 @@ static enum lobi_result lobi_page_search(char* err, struct lobi_page_addr* addr,
 	#define SEARCH_HTML_POSTFORM_PARAM_SUFFIX_LEN 1
 
 	if (!addr) {
-		if (err) sprintf(err, "No struct to output page address given");
+		if (err) sprintf(err, "No struct to output Library of Babel page address given");
 		return FAILURE_INPUT_E;
 	}
 
@@ -547,7 +656,7 @@ static enum lobi_result lobi_page_search(char* err, struct lobi_page_addr* addr,
 		switch (page_addr_part) {
 			case HEXAGON_E:
 				if (!lobi_hexagon_addr_validate(NULL, html_ptr, addr_part_len)) {
-					if (err) sprintf(err, "Failed to parse hexagon address of page address");
+					if (err) sprintf(err, "Failed to parse hexagon address of Library of Babel page address");
 					goto exit;
 				}
 
@@ -557,34 +666,34 @@ static enum lobi_result lobi_page_search(char* err, struct lobi_page_addr* addr,
 
 			case WALL_E:
 				if (!lobi_page_addr_wall_parse_str(&addr->wall, html_ptr, addr_part_len)) {
-					if (err) sprintf(err, "Failed to parse wall number of page address");
+					if (err) sprintf(err, "Failed to parse wall number of Library of Babel page address");
 					goto exit;
 				}
 				break;
 
 			case SHELF_E:
 				if (!lobi_page_addr_shelf_parse_str(&addr->shelf, html_ptr, addr_part_len)) {
-					if (err) sprintf(err, "Failed to parse shelf number of page address");
+					if (err) sprintf(err, "Failed to parse shelf number of Library of Babel page address");
 					goto exit;
 				}
 				break;
 
 			case VOLUME_E:
 				if (!lobi_page_addr_volume_parse_str(&addr->volume, html_ptr, addr_part_len)) {
-					if (err) sprintf(err, "Failed to parse volume number of page address");
+					if (err) sprintf(err, "Failed to parse volume number of Library of Babel page address");
 					goto exit;
 				}
 				break;
 
 			case PAGE_E:
 				if (!lobi_page_addr_page_parse_str(&addr->page, html_ptr, addr_part_len)) {
-					if (err) sprintf(err, "Failed to parse page number of page address");
+					if (err) sprintf(err, "Failed to parse page number of Library of Babel page address");
 					goto exit;
 				}
 				break;
 
 			default:
-				if (err) sprintf(err, "Unknown page address part: %d", page_addr_part);
+				if (err) sprintf(err, "Unknown Library of Babel page address part: %d", page_addr_part);
 				goto exit;
 		}
 
@@ -616,14 +725,14 @@ enum lobi_result lobi_page_get(char* err, struct dynarr* text, const struct lobi
 	#define PAGE_URL_PATH_BASE_LEN 10
 
 	if (!text) {
-		if (err) sprintf(err, "No dynamic array to output page content given");
+		if (err) sprintf(err, "No dynamic array to output Library of Babel page contents given");
 		return FAILURE_INPUT_E;
 	}
 
 	enum lobi_result result = FAILURE_GENERAL_E;
 
 	// Build page URL path
-	char url_path[STR_CHARS(PAGE_URL_PATH_BASE_LEN + LOBI_PAGE_ADDR_STR_LEN)] = {0};
+	char url_path[STR_CHARS(PAGE_URL_PATH_BASE_LEN + LOBI_ADDR_STR_PAGE_LEN)] = {0};
 	strcat(url_path, PAGE_URL_PATH_BASE);
 	lobi_page_addr_sprint(&url_path[PAGE_URL_PATH_BASE_LEN], addr);
 

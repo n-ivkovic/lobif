@@ -7,7 +7,6 @@
 
 #include <ctype.h>
 #include <stdarg.h>
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -19,7 +18,6 @@
 #define ARG_STDOUT "-"
 
 #define FP_READ_MAX 0xFFFFF
-#define FP_READ_PAGE_ADDR_STR (LOBI_PAGE_ADDR_STR_LEN + 0x10) // Address length + some buffer for whitespace
 
 #define DYNARR_STR(da) (char*)da.vals
 #define DYNARR_STR_LEN(da) (da.len - 1)
@@ -37,11 +35,19 @@ enum operation {
 };
 
 /**
- * Library of Babel encoding method.
+ * Binary-to-text encoding scheme.
  */
-enum encoding {
+enum data_encoding {
 	BHEX_E,
 	B28_E
+};
+
+/**
+ * Library of Babel page address format.
+ */
+enum page_addr_format {
+	STR_E,
+	BIN_E
 };
 
 /**
@@ -49,7 +55,8 @@ enum encoding {
  *
  * @param opr Parsed CLI operation.
  * @param str String to parse.
- * @param len Length of string to parse.
+ * @param len Length of string to parse, excluding null-terminator.
+ * @returns Whether CLI operation was successfully parsed from string.
  */
 static bool operation_parse(enum operation* opr, const char* str, const size_t len)
 {
@@ -82,20 +89,21 @@ static bool operation_parse(enum operation* opr, const char* str, const size_t l
 }
 
 /**
- * Parse encoding method from string.
+ * Parse binary-to-text encoding scheme from string.
  *
- * @param enc Parsed encoding method.
+ * @param enc Parsed binary-to-text encoding scheme.
  * @param str String to parse.
- * @param len Length of string to parse.
+ * @param len Length of string to parse, excluding null-terminator.
+ * @returns Whether binary-to-text encoding scheme was successfully parsed from string.
  */
-static bool encoding_parse(enum encoding* enc, const char* str, const size_t len)
+static bool data_encoding_parse(enum data_encoding* enc, const char* str, const size_t len)
 {
-	struct encoding_str {
-		enum encoding enc;
+	struct data_encoding_str {
+		enum data_encoding enc;
 		char str_lower[STR_CHARS(8)];
 	};
 
-	static const struct encoding_str enc_strs[] = {
+	static const struct data_encoding_str enc_strs[] = {
 		{ .enc = BHEX_E, .str_lower = "bhex" },
 		{ .enc = BHEX_E, .str_lower = "babelhex" },
 		{ .enc = BHEX_E, .str_lower = "b16" },
@@ -108,7 +116,7 @@ static bool encoding_parse(enum encoding* enc, const char* str, const size_t len
 		return false;
 
 	for (size_t ind = 0; ind < sizeof(enc_strs) / sizeof(enc_strs[0]); ind++) {
-		struct encoding_str enc_str = enc_strs[ind];
+		struct data_encoding_str enc_str = enc_strs[ind];
 		if (str_comp(str, enc_str.str_lower, STR_CHARS(len), tolower) == 0) {
 			*enc = enc_str.enc;
 			return true;
@@ -119,16 +127,54 @@ static bool encoding_parse(enum encoding* enc, const char* str, const size_t len
 }
 
 /**
- * Encode bytes as string.
+ * Parse Library of Babel page address format from string.
+ *
+ * @param fmt Parsed page address format.
+ * @param str String to parse.
+ * @param len Length of string to parse, excluding null-terminator.
+ * @returns Whether page address format was successfully parsed from string.
+ */
+static bool page_addr_format_parse(enum page_addr_format* fmt, const char* str, const size_t len)
+{
+	struct addr_format_str {
+		enum page_addr_format fmt;
+		char str_lower[STR_CHARS(6)];
+	};
+
+	static const struct addr_format_str fmt_strs[] = {
+		{ .fmt = STR_E, .str_lower = "str" },
+		{ .fmt = STR_E, .str_lower = "string" },
+		{ .fmt = STR_E, .str_lower = "txt" },
+		{ .fmt = STR_E, .str_lower = "text" },
+		{ .fmt = BIN_E, .str_lower = "bin" },
+		{ .fmt = BIN_E, .str_lower = "binary" }
+	};
+
+	if (!fmt || !str)
+		return false;
+
+	for (size_t ind = 0; ind < sizeof(fmt_strs) / sizeof(fmt_strs[0]); ind++) {
+		struct addr_format_str fmt_str = fmt_strs[ind];
+		if (str_comp(str, fmt_str.str_lower, STR_CHARS(len), tolower) == 0) {
+			*fmt = fmt_str.fmt;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Perform binary-to-text encoding.
  *
  * @param err Buffer to write error messages to.
  * @param str Struct to output encoded string to, including null-terminator.
  * @param bytes Bytes to encode.
  * @param n Number of bytes to encode.
- * @param enc Encoding method.
+ * @param enc Binary-to-text encoding scheme.
  * @returns Whether bytes were encoded successfully.
  */
-static bool encode(char* err, struct dynarr* str, const uint8_t* bytes, const size_t n, const enum encoding enc)
+static bool encode(char* err, struct dynarr* str, const uint8_t* bytes, const size_t n, const enum data_encoding enc)
 {
 	if (!str) {
 		if (err) sprintf(err, "Struct to output encoded string not given");
@@ -176,16 +222,16 @@ static bool encode(char* err, struct dynarr* str, const uint8_t* bytes, const si
 }
 
 /**
- * Decode bytes from encoded string.
+ * Perform text-to-binary decoding.
  *
  * @param err Buffer to write error messages to.
  * @param bytes Struct to output decoded bytes to.
  * @param str Encoded string to decode.
  * @param len Length of encoded string to decode, excluding null-terminator.
- * @param enc Encoding method.
+ * @param enc Binary-to-text encoding scheme.
  * @returns Whether string was decoded successfully.
  */
-static bool decode(char* err, struct dynarr* bytes, const char* str, const size_t len, const enum encoding enc)
+static bool decode(char* err, struct dynarr* bytes, const char* str, const size_t len, const enum data_encoding enc)
 {
 	if (!bytes) {
 		if (err) sprintf(err, "Struct to output decoded bytes not given");
@@ -265,13 +311,13 @@ static bool decode(char* err, struct dynarr* bytes, const char* str, const size_
 }
 
 /**
- * Get number of bytes to decode from an encoded string of a given length.
+ * Get number of bytes to decode when performing text-to-binary decoding on a string of a given length.
  *
  * @param n Result to write number of bytes to decode from encoded string of given length.
  * @param len Length of encoded string to decode, excluding null-terminator.
- * @param enc Encoding method.
+ * @param enc Binary-to-text encoding scheme.
  */
-static bool decode_len(size_t* n, const size_t len, const enum encoding enc)
+static bool decode_len(size_t* n, const size_t len, const enum data_encoding enc)
 {
 	switch (enc) {
 		case BHEX_E:
@@ -284,12 +330,13 @@ static bool decode_len(size_t* n, const size_t len, const enum encoding enc)
 }
 
 /**
- * Read bytes from input file.
+ * Read bytes from input path.
  *
  * @param err Buffer to write error messages to.
  * @param bytes Dynamic arrays to set values of.
  * @param n Maximum number of bytes to read.
  * @param path Path to read string from. Will read from stdin if NULL.
+ * @returns Pointer to bytes read from input. NULL if error.
  */
 static uint8_t* input_bytes(char* err, struct dynarr* bytes, const size_t n, const char* path)
 {
@@ -335,13 +382,14 @@ static uint8_t* input_bytes(char* err, struct dynarr* bytes, const size_t n, con
 }
 
 /**
- * Read string from input file.
+ * Read string from input path.
  *
  * @param err Buffer to write error messages to.
  * @param str String to set values of.
  * @param len Maximum length of string to read, excluding null-terminator.
  * @param trim Whether to trim whitespace from read string.
  * @param path Path to read string from. Will read from stdin if NULL.
+ * @returns Pointer to string read from input path. NULL if error.
  */
 static char* input_str(char* err, struct dynarr* str, const size_t len, bool trim, const char* path)
 {
@@ -407,20 +455,44 @@ static char* input_str(char* err, struct dynarr* str, const size_t len, bool tri
 	return result;
 }
 
-static bool input_page_addr(char* err, struct lobi_page_addr* addr, const char* path)
+/**
+ * Read Library of Babel page address from input path.
+ *
+ * @param err Buffer to write error messages to.
+ * @param addr Page address to set value of.
+ * @param fmt Expected format of input page address.
+ * @param path Path to read page address from. Will be read from stdin if NULL.
+ * @returns Pointer to page address read from input path. NULL if error.
+ */
+static struct lobi_page_addr* input_page_addr(char* err, struct lobi_page_addr* addr, const enum page_addr_format fmt, const char* path)
 {
 	bool success = false;
 
-	struct dynarr str = {0};
+	struct dynarr addr_da = {0};
 
-	if (!input_str(err, &str, FP_READ_PAGE_ADDR_STR, true, path))
-		goto exit;
+	switch (fmt) {
+		case BIN_E:
+			if (!input_bytes(err, &addr_da, LOBI_ADDR_BIN_PAGE_SIZE, path))
+				goto exit;
 
-	success = lobi_page_addr_parse_str(err, addr, DYNARR_STR(str), DYNARR_STR_LEN(str)) == SUCCESS_E;
+			success = lobi_page_addr_parse_bin(err, addr, addr_da.vals, addr_da.len) == SUCCESS_E;
+			break;
+
+		case STR_E:
+			if (!input_str(err, &addr_da, LOBI_ADDR_STR_PAGE_LEN + 0x10, true, path)) // Max address len + some buffer for whitespace
+				goto exit;
+
+			success = lobi_page_addr_parse_str(err, addr, DYNARR_STR(addr_da), DYNARR_STR_LEN(addr_da)) == SUCCESS_E;
+			break;
+
+		default:
+			if (err) sprintf(err, "Unknown Library of Babel page address format: %d", fmt);
+			goto exit;
+	}
 
 	exit:
-	dynarr_empty(&str);
-	return success;
+	dynarr_empty(&addr_da);
+	return success ? addr : NULL;
 }
 
 /**
@@ -429,6 +501,7 @@ static bool input_page_addr(char* err, struct lobi_page_addr* addr, const char* 
  * @param err Buffer to write error messages to.
  * @param bytes Bytes to write to output.
  * @param path Path to write bytes to. Will write to stdout if NULL.
+ * @returns Whether bytes were written to output successfully.
  */
 static bool output_bytes(char* err, const struct dynarr bytes, const char* path)
 {
@@ -453,6 +526,7 @@ static bool output_bytes(char* err, const struct dynarr bytes, const char* path)
  * @param err Buffer to write error messages to.
  * @param str String to write to output.
  * @param path Path to write string to. Will write to stdout if NULL.
+ * @returns Whether string was written to output successfully.
  */
 static bool output_str(char* err, const char* str, const char* path)
 {
@@ -475,18 +549,43 @@ static bool output_str(char* err, const char* str, const char* path)
 	return true;
 }
 
-static bool output_page_addr(char* err, const struct lobi_page_addr addr, const char* path)
+/**
+ * Write Library of Babel page address to output path.
+ *
+ * @param err Buffer to write error messages to.
+ * @param addr Page address to write to output.
+ * @param fmt Format to write page address in.
+ * @param path Path to write page address to. Will write to stdout if NULL.
+ * @returns Whether page address was written to output successfully.
+ */
+static bool output_page_addr(char* err, const struct lobi_page_addr addr, const enum page_addr_format fmt, const char* path)
 {
 	bool success = false;
 
-	struct dynarr str = {0};
-	if (lobi_page_addr_fmt_str(err, &str, addr) != SUCCESS_E)
-		goto exit;
+	struct dynarr addr_da = {0};
 
-	success = output_str(err, str.vals, path);
+	switch (fmt) {
+		case BIN_E:
+			if (lobi_page_addr_fmt_bin(err, &addr_da, addr) != SUCCESS_E)
+				goto exit;
+
+			success = output_bytes(err, addr_da, path);
+			break;
+
+		case STR_E:
+			if (lobi_page_addr_fmt_str(err, &addr_da, addr) != SUCCESS_E)
+				goto exit;
+
+			success = output_str(err, addr_da.vals, path);
+			break;
+
+		default:
+			if (err) sprintf(err, "Unknown Library of Babel page address format: %d", fmt);
+			goto exit;
+	}
 
 	exit:
-	dynarr_empty(&str);
+	dynarr_empty(&addr_da);
 	return success;
 }
 
@@ -496,7 +595,8 @@ int main(int argc, char* argv[])
 	char err[1024] = {0};
 
 	enum operation opr;
-	enum encoding enc = B28_E;
+	enum data_encoding data_enc = B28_E;
+	enum page_addr_format page_addr_fmt = STR_E;
 	char* in_path = NULL;
 	char* out_path = NULL;
 
@@ -520,7 +620,7 @@ int main(int argc, char* argv[])
 	}
 
 	// Parse option args
-	while ((optc = getopt(argc - 1, &argv[1], ":o:e:")) != -1) {
+	while ((optc = getopt(argc - 1, &argv[1], ":o:e:f:")) != -1) {
 		size_t optarg_len = strlen(optarg);
 
 		switch (optc) {
@@ -528,14 +628,31 @@ int main(int argc, char* argv[])
 				out_path = optarg;
 				break;
 			case 'e':
-				// Parse encoding arg only if operation utilizes encoding, otherwise treat as unknown arg
+				// Parse data encoding arg only if operation utilizes encoding, otherwise treat as unknown arg
 				switch (opr) {
 					case PAGE_SEARCH_ENCODE_E:
 					case PAGE_GET_DECODE_E:
 					case ENCODE_E:
 					case DECODE_E:
-						if (!encoding_parse(&enc, optarg, optarg_len)) {
-							sprintf(err, "Unknown encoding given: %s", optarg);
+						if (!data_encoding_parse(&data_enc, optarg, optarg_len)) {
+							sprintf(err, "Unknown binary-to-text encoding scheme given: %s", optarg);
+							goto exit;
+						}
+						break;
+					default:
+						sprintf(err, "Unknown option given: -%c", optopt);
+						goto exit;
+				}
+				break;
+			case 'f':
+				// Parse page address format arg only if operation utilizes page addresses, otherwise treat as unknown arg
+				switch (opr) {
+					case PAGE_SEARCH_ENCODE_E:
+					case PAGE_GET_DECODE_E:
+					case PAGE_SEARCH_E:
+					case PAGE_GET_E:
+						if (!page_addr_format_parse(&page_addr_fmt, optarg, optarg_len)) {
+							sprintf(err, "Unknown Library of Babel page address format given: %s", optarg);
 							goto exit;
 						}
 						break;
@@ -573,8 +690,8 @@ int main(int argc, char* argv[])
 			;
 			// Based on encoding to use, get max number of bytes that should be read from input file
 			size_t bytes_n;
-			if (!decode_len(&bytes_n, LOBI_PAGE_TEXT_LEN, enc)) {
-				sprintf(err, "Cannot use encoding given: %d", enc);
+			if (!decode_len(&bytes_n, LOBI_PAGE_TEXT_LEN, data_enc)) {
+				sprintf(err, "Cannot use encoding given: %d", data_enc);
 				goto exit;
 			}
 
@@ -583,7 +700,7 @@ int main(int argc, char* argv[])
 				goto exit;
 
 			// Encode given bytes to string
-			if (!encode(err, &string_da, bytes_da.vals, bytes_da.len, enc))
+			if (!encode(err, &string_da, bytes_da.vals, bytes_da.len, data_enc))
 				goto exit;
 
 			// Find Library of Babel page whose content matches encoded string
@@ -593,7 +710,7 @@ int main(int argc, char* argv[])
 				goto exit;
 
 			// Output Library of Babel page address
-			if (!output_page_addr(err, page_addr, out_path))
+			if (!output_page_addr(err, page_addr, page_addr_fmt, out_path))
 				goto exit;
 
 			success = true;
@@ -601,7 +718,7 @@ int main(int argc, char* argv[])
 
 		case PAGE_GET_DECODE_E:
 			// Read Library of Babel page address from input file
-			if (!input_page_addr(err, &page_addr, in_path))
+			if (!input_page_addr(err, &page_addr, page_addr_fmt, in_path))
 				goto exit;
 
 			// Get content of Library of Babel page at given address
@@ -609,7 +726,7 @@ int main(int argc, char* argv[])
 				goto exit;
 
 			// Decode Library of Babel page content
-			if (!decode(err, &bytes_da, string_da.vals, string_da.len, enc))
+			if (!decode(err, &bytes_da, string_da.vals, string_da.len, data_enc))
 				goto exit;
 
 			// Output decoded bytes
@@ -629,7 +746,7 @@ int main(int argc, char* argv[])
 				goto exit;
 
 			// Output Library of Babel page address
-			if (!output_page_addr(err, page_addr, out_path))
+			if (!output_page_addr(err, page_addr, page_addr_fmt, out_path))
 				goto exit;
 
 			success = true;
@@ -637,7 +754,7 @@ int main(int argc, char* argv[])
 
 		case PAGE_GET_E:
 			// Read Library of Babel page address from input file
-			if (!input_page_addr(err, &page_addr, in_path))
+			if (!input_page_addr(err, &page_addr, page_addr_fmt, in_path))
 				goto exit;
 
 			// Get content of Library of Babel page at given address
@@ -657,7 +774,7 @@ int main(int argc, char* argv[])
 				goto exit;
 
 			// Encode given bytes to string
-			if (!encode(err, &string_da, bytes_da.vals, bytes_da.len, enc))
+			if (!encode(err, &string_da, bytes_da.vals, bytes_da.len, data_enc))
 				goto exit;
 
 			// Output encoded string
@@ -673,7 +790,7 @@ int main(int argc, char* argv[])
 				goto exit;
 
 			// Decode bytes from given encoded string
-			if (!decode(err, &bytes_da, DYNARR_STR(string_da), DYNARR_STR_LEN(string_da), enc))
+			if (!decode(err, &bytes_da, DYNARR_STR(string_da), DYNARR_STR_LEN(string_da), data_enc))
 				goto exit;
 
 			// Output decoded bytes
