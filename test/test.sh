@@ -209,55 +209,55 @@ _test_encoding() {
 # $failed_count
 # $failed_names
 _test_page() {
-    pos_path="${2}/page/positive"
+	pos_path="${2}/page/positive"
 	neg_path="${2}/page/negative"
 	text_ext='.txt'
 	addr_ext='.addr'
 	in_ext='.in'
 	err_ext='.err'
 
-    # Execute positive page search + get tests
+	# Execute positive page search + get tests
 	pos_text_files="$(find "$pos_path" -type f -name "*${text_ext}")"
 	for text_file in $pos_text_files; do
-        total_count=$((total_count + 2))
+		total_count=$((total_count + 2))
 
-        # Arrange - Get test name
+		# Arrange - Get test name
 		test_name="$(basename "$text_file" | sed "s/${text_ext}\$//")"
 
-        # Arrange - Find file containing expected page adddress
+		# Arrange - Find file containing expected page adddress
 		addr_file="$(printf "%s" "$text_file" | sed "s/${text_ext}\$/${addr_ext}/")"
 		! [ -f "$addr_file" ] && _exit_err 3 "${text_file}: No accompanying ${addr_ext} file found"
 
-        # Arrange - Get expected stdouts
-        text_expected="$(sed 's/ \+$//g' < "$text_file")" # Trim suffixed space chars
-        addr_expected="$(cat "$addr_file")"
+		# Arrange - Get expected stdouts
+		text_expected="$(sed 's/ \+$//g' < "$text_file")" # Trim suffixed space chars
+		addr_expected="$(cat "$addr_file")"
 
-        # Act - Execute and concat both stdout and stderr
-        text_result="$("$exe_path" page-get "$addr_file" 2>&1 | sed 's/ \+$//g')" # Trim suffixed space chars
-        addr_result="$("$exe_path" page-search "$text_file" 2>&1)"
+		# Act - Execute and concat both stdout and stderr
+		text_result="$("$exe_path" page-get "$addr_file" 2>&1 | sed 's/ \+$//g')" # Trim suffixed space chars
+		addr_result="$("$exe_path" page-search "$text_file" 2>&1)"
 
-        # Assert page content
-        # - Execution should return expected stdout
-        # - Execution should return no stderr - any error should cause assertion to fail
-        if [ "$text_result" = "$text_expected" ]; then
-            passed_count=$((passed_count + 1))
-        else
-            failed_count=$((failed_count + 1))
-            failed_names="${failed_names}${pos_path}/${test_name}: page-get\n"
-        fi
+		# Assert page content
+		# - Execution should return expected stdout
+		# - Execution should return no stderr - any error should cause assertion to fail
+		if [ "$text_result" = "$text_expected" ]; then
+			passed_count=$((passed_count + 1))
+		else
+			failed_count=$((failed_count + 1))
+			failed_names="${failed_names}${pos_path}/${test_name}: page-get\n"
+		fi
 
-        # Assert page address
-        # - Execution should return expected stdout
-        # - Execution should return no stderr - any error should cause assertion to fail
-        if [ "$addr_result" = "$addr_expected" ]; then
-            passed_count=$((passed_count + 1))
-        else
-            failed_count=$((failed_count + 1))
-            failed_names="${failed_names}${pos_path}/${test_name}: page-search\n"
-        fi
+		# Assert page address
+		# - Execution should return expected stdout
+		# - Execution should return no stderr - any error should cause assertion to fail
+		if [ "$addr_result" = "$addr_expected" ]; then
+			passed_count=$((passed_count + 1))
+		else
+			failed_count=$((failed_count + 1))
+			failed_names="${failed_names}${pos_path}/${test_name}: page-search\n"
+		fi
 	done
 
-    # Execute negative page search + get tests
+	# Execute negative page search + get tests
 	neg_in_files="$(find "$neg_path" -type f -name "*${in_ext}")"
 	for in_file in $neg_in_files; do
 		total_count=$((total_count + 1))
