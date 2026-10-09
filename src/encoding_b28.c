@@ -5,6 +5,7 @@
 #include <inttypes.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #define B28_BYTES_PER_BLOCK 3
 #define B28_CHARS_PER_BLOCK 5
@@ -72,10 +73,12 @@ bool b28_encode(struct dynarr* str, const void* bytes, const size_t n)
 		// 0x48656C -> "fsbsk"
 		// 0x6C6F00 -> "jnsc"
 		for (int block_char_ind = B28_CHARS_PER_BLOCK - 1; block_char_ind >= 0; block_char_ind--) {
-			if ((size_t)block_char_ind < block_chars_len)
-				block_chars[block_char_ind] = B28_CHARS[block_val % B28_CHARS_LEN];
+			lldiv_t block_div_chars = lldiv(block_val, B28_CHARS_LEN);
 
-			block_val /= B28_CHARS_LEN;
+			if ((size_t)block_char_ind < block_chars_len)
+				block_chars[block_char_ind] = B28_CHARS[block_div_chars.rem];
+
+			block_val = block_div_chars.quot;
 		}
 
 		// Write block chars to result
