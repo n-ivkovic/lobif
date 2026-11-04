@@ -5,8 +5,8 @@
 #include "lobi.h"
 #include "str.h"
 
+#include <assert.h>
 #include <ctype.h>
-#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -72,7 +72,7 @@ static bool operation_parse(enum operation* opr, const char* str, const size_t l
 
 	for (size_t ind = 0; ind < sizeof(opr_strs) / sizeof(opr_strs[0]); ind++) {
 		struct operation_str opr_str = opr_strs[ind];
-		if (str_comp(str, opr_str.str_lower, STR_CHARS(len), tolower) == 0) {
+		if (str_comp(str, opr_str.str_lower, len, tolower) == 0) {
 			*opr = opr_str.opr;
 			return true;
 		}
@@ -109,7 +109,7 @@ static bool encoding_parse(enum encoding* enc, const char* str, const size_t len
 
 	for (size_t ind = 0; ind < sizeof(enc_strs) / sizeof(enc_strs[0]); ind++) {
 		struct encoding_str enc_str = enc_strs[ind];
-		if (str_comp(str, enc_str.str_lower, STR_CHARS(len), tolower) == 0) {
+		if (str_comp(str, enc_str.str_lower, len, tolower) == 0) {
 			*enc = enc_str.enc;
 			return true;
 		}
@@ -197,24 +197,16 @@ static bool decode(char* err, struct dynarr* bytes, const char* str, const size_
 	bool bytes_unalloc = !bytes->vals;
 	size_t bytes_n;
 
-	char* str_tr = NULL;
-	size_t str_tr_len;
-
 	// Alloc space to trim whitespace from input string
-	str_tr = calloc(STR_CHARS(len), sizeof(char));
+	char* str_tr = calloc(STR_CHARS(len), sizeof(char));
 	if (!str_tr) {
 		if (err) sprintf(err, "Failed to allocate memory");
 		goto exit;
 	}
 
 	// Trim whitespace from input string
-	if (!str_trim(str_tr, str, len)) {
-		if (err) sprintf(err, "Failed to trim input string");
-		goto exit;
-	}
-
-	str_tr_len = strlen(str_tr);
-	str_tr_len = str_tr_len > len ? len : str_tr_len;
+	size_t str_tr_len = str_trim(str_tr, str, len, isspace);
+	assert(str_tr_len <= len);
 
 	switch (enc) {
 		case BHEX_E:
@@ -382,16 +374,13 @@ static char* input_str(char* err, struct dynarr* str, const size_t len, bool tri
 		}
 
 		// Trim whitespace from file buffer
-		if (!str_trim(buffer_tr, buffer, buffer_n)) {
-			if (err) sprintf(err, "Failed to trim string");
-			free(buffer_tr);
-			goto exit;
-		}
+		size_t buffer_tr_len = str_trim(buffer_tr, buffer, buffer_n, isspace);
+		assert(buffer_tr_len <= buffer_n);
 
 		// Replace existing file buffer with trimmed file buffer
 		free(buffer);
 		buffer = buffer_tr;
-		buffer_n = strlen(buffer_tr);
+		buffer_n = buffer_tr_len;
 	}
 
 	// Copy file buffer to dynamic array
