@@ -5,7 +5,6 @@
 #include <curl/curl.h>
 
 #include <errno.h>
-#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -46,13 +45,13 @@ static bool parse_ushort(unsigned short* ushort, const char* str, const size_t l
 
 	bool success = false;
 
-	// Allocate space to ensure input is null-terminated
+	// Allocate space to ensure only length of input is parsed
 	char* str_buffer = calloc(STR_CHARS(len), sizeof(char));
 	if (!str_buffer)
 		goto exit;
 
-	// Ensure input is null-terminated
-	snprintf(str_buffer, STR_CHARS(len), "%s", str);
+	// Ensure only length of input is parsed
+	str_copy(str_buffer, str, len);
 
 	errno = 0;
 	char* end;
@@ -173,15 +172,15 @@ enum lobi_result lobi_page_addr_parse_str(char* err, struct lobi_page_addr* addr
 
 	enum lobi_result result = FAILURE_GENERAL_E;
 
-	// Allocate space to ensure input is null-terminated
+	// Allocate space to ensure only length of input is parsed
 	char* str_buffer = calloc(STR_CHARS(len), sizeof(char));
 	if (!str_buffer) {
 		if (err) sprintf(err, "Failed to allocate memory");
 		goto exit;
 	}
 
-	// Ensure input is null-terminated
-	snprintf(str_buffer, STR_CHARS(len), "%s", str);
+	// Ensure only length of input is parsed
+	str_copy(str_buffer, str, len);
 
 	// Loop through page address parts of formatted string
 	char* addr_part_ptr = str_buffer;
@@ -210,7 +209,7 @@ enum lobi_result lobi_page_addr_parse_str(char* err, struct lobi_page_addr* addr
 				}
 
 				addr->hexagon_len = addr_part_len;
-				snprintf(addr->hexagon, STR_CHARS(addr_part_len), "%s", addr_part_ptr);
+				str_copy(addr->hexagon, addr_part_ptr, addr_part_len);
 				break;
 
 			case WALL_E:
@@ -273,12 +272,10 @@ static size_t lobi_page_addr_sprint(char* str, const struct lobi_page_addr addr)
 	if (!str)
 		return 0;
 
-	size_t str_len = 0;
-	str_len += snprintf(&str[str_len], STR_CHARS(addr.hexagon_len), "%s", addr.hexagon);
-	str_len += snprintf(
-		&str[str_len],
-		STR_CHARS(LOBI_ADDR_STR_PAGE_LEN - addr.hexagon_len),
-		"%s%d%s%d%s%02d%s%d%s",
+	char addr_offset[STR_CHARS(LOBI_ADDR_STR_PAGE_OFFSET_LEN)] = {0};
+	sprintf(
+		addr_offset,
+		"%s%hhd%s%hhd%s%02hhd%s%hd%s",
 		lobi_page_addr_part_suffixes[HEXAGON_E],
 		addr.wall,
 		lobi_page_addr_part_suffixes[WALL_E],
@@ -290,6 +287,10 @@ static size_t lobi_page_addr_sprint(char* str, const struct lobi_page_addr addr)
 		lobi_page_addr_part_suffixes[PAGE_E]
 	);
 
+	size_t str_len = 0;
+	str_len += str_copy(&str[str_len], addr.hexagon, addr.hexagon_len);
+	str_len += str_copy(&str[str_len], addr_offset, LOBI_ADDR_STR_PAGE_OFFSET_LEN);
+
 	return str_len;
 }
 
@@ -300,30 +301,17 @@ enum lobi_result lobi_page_addr_fmt_str(char* err, struct dynarr* str, const str
 		return FAILURE_INPUT_E;
 	}
 
-	enum lobi_result result = FAILURE_GENERAL_E;
-	char* str_buffer = NULL;
-
-	// Allocate space to print formatted page address
-	str_buffer = calloc(STR_CHARS(LOBI_ADDR_STR_PAGE_LEN), sizeof(char));
-	if (!str_buffer) {
-		if (err) sprintf(err, "Failed to allocate memory");
-		goto exit;
-	}
-
 	// Print formatted page address
+	char str_buffer[STR_CHARS(LOBI_ADDR_STR_PAGE_LEN)] = {0};
 	size_t str_buffer_len = lobi_page_addr_sprint(str_buffer, addr);
 
 	// Copy formatted page address to dynamic array
 	if (!dynarr_set(str, 0, str_buffer, STR_CHARS(str_buffer_len), sizeof(char))) {
 		if (err) sprintf(err, "Failed to update dynamic array");
-		goto exit;
+		return FAILURE_GENERAL_E;
 	}
 
-	result = SUCCESS_E;
-
-	exit:
-	if (str_buffer) free(str_buffer);
-	return result;
+	return SUCCESS_E;
 }
 
 enum lobi_result lobi_page_addr_parse_bin(char* err, struct lobi_page_addr* addr, const void* bytes, const size_t n)
@@ -510,7 +498,7 @@ static CURL* curl_init_lobi(char* err, CURL** curl, const char* path, const size
 
 	// Build request URL
 	strcat(url, URL_BASE);
-	snprintf(&url[URL_BASE_LEN], STR_CHARS(len), "%s", path);
+	str_copy(&url[URL_BASE_LEN], path, len);
 
 	curl_easy_setopt(*curl, CURLOPT_URL, url);
 	curl_easy_setopt(*curl, CURLOPT_USERAGENT, "lobi/1.0");
@@ -661,7 +649,7 @@ static enum lobi_result lobi_page_search(char* err, struct lobi_page_addr* addr,
 				}
 
 				addr->hexagon_len = addr_part_len;
-				snprintf(addr->hexagon, STR_CHARS(addr_part_len), "%s", html_ptr);
+				str_copy(addr->hexagon, html_ptr, addr_part_len);
 				break;
 
 			case WALL_E:
