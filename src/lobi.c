@@ -4,21 +4,22 @@
 
 #include <curl/curl.h>
 
+#include <assert.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define LOBI_PAGE_ADDR_PARTS 5
-#define LOBI_PAGE_ADDR_WALL_MAX 4
-#define LOBI_PAGE_ADDR_SHELF_MAX 5
-#define LOBI_PAGE_ADDR_VOLUME_MAX 32
-#define LOBI_PAGE_ADDR_PAGE_MAX 410
+#define LOBI_ADDR_HEXAGON_BASE 36
 
-#define LOBI_PAGE_ADDR_BIN_OFFSET_MAX ((LOBI_PAGE_ADDR_WALL_MAX * LOBI_PAGE_ADDR_SHELF_MAX * LOBI_PAGE_ADDR_VOLUME_MAX * LOBI_PAGE_ADDR_PAGE_MAX) - 1)
-#define LOBI_ADDR_BIN_PAGE_SIZE_MIN 4
-#define LOBI_ADDR_STR_PAGE_LEN_MIN 13 // "0-w1-s1-v01:1"
+#define LOBI_ADDR_PAGE_PARTS 5
+#define LOBI_ADDR_PAGE_WALL_MAX 4
+#define LOBI_ADDR_PAGE_SHELF_MAX 5
+#define LOBI_ADDR_PAGE_VOLUME_MAX 32
+#define LOBI_ADDR_PAGE_PAGE_MAX 410
+
+#define LOBI_ADDR_BIN_PAGE_OFFSET_MAX ((LOBI_ADDR_PAGE_WALL_MAX * LOBI_ADDR_PAGE_SHELF_MAX * LOBI_ADDR_PAGE_VOLUME_MAX * LOBI_ADDR_PAGE_PAGE_MAX) - 1)
 
 /**
  * Sections of a Library of Babel page address.
@@ -31,7 +32,7 @@ enum lobi_page_addr_parts {
 	PAGE_E
 };
 
-static const char lobi_page_addr_part_suffixes[LOBI_PAGE_ADDR_PARTS][3] = {"-w", "-s", "-v", ":", ""};
+static const char lobi_page_addr_part_suffixes[LOBI_ADDR_PAGE_PARTS][3] = {"-w", "-s", "-v", ":", ""};
 
 /**
  * Parse and validate unsigned short from string.
@@ -89,7 +90,7 @@ static bool parse_uchar(unsigned char* uchar, const char* str, const size_t len,
  */
 static inline bool lobi_page_addr_wall_parse_str(unsigned char* wall, const char* str, const size_t len)
 {
-	return parse_uchar(wall, str, len, 1, LOBI_PAGE_ADDR_WALL_MAX);
+	return parse_uchar(wall, str, len, 1, LOBI_ADDR_PAGE_WALL_MAX);
 }
 
 /**
@@ -97,7 +98,7 @@ static inline bool lobi_page_addr_wall_parse_str(unsigned char* wall, const char
  */
 static inline bool lobi_page_addr_shelf_parse_str(unsigned char* shelf, const char* str, const size_t len)
 {
-	return parse_uchar(shelf, str, len, 1, LOBI_PAGE_ADDR_SHELF_MAX);
+	return parse_uchar(shelf, str, len, 1, LOBI_ADDR_PAGE_SHELF_MAX);
 }
 
 /**
@@ -105,7 +106,7 @@ static inline bool lobi_page_addr_shelf_parse_str(unsigned char* shelf, const ch
  */
 static inline bool lobi_page_addr_volume_parse_str(unsigned char* volume, const char* str, const size_t len)
 {
-	return parse_uchar(volume, str, len, 1, LOBI_PAGE_ADDR_VOLUME_MAX);
+	return parse_uchar(volume, str, len, 1, LOBI_ADDR_PAGE_VOLUME_MAX);
 }
 
 /**
@@ -113,7 +114,7 @@ static inline bool lobi_page_addr_volume_parse_str(unsigned char* volume, const 
  */
 static inline bool lobi_page_addr_page_parse_str(unsigned short* page, const char* str, const size_t len)
 {
-	return parse_ushort(page, str, len, 1, LOBI_PAGE_ADDR_PAGE_MAX);
+	return parse_ushort(page, str, len, 1, LOBI_ADDR_PAGE_PAGE_MAX);
 }
 
 /**
@@ -184,7 +185,7 @@ enum lobi_result lobi_page_addr_parse_str(char* err, struct lobi_page_addr* addr
 
 	// Loop through page address parts of formatted string
 	char* addr_part_ptr = str_buffer;
-	for (enum lobi_page_addr_parts page_addr_part = 0; page_addr_part < LOBI_PAGE_ADDR_PARTS; page_addr_part++) {;
+	for (enum lobi_page_addr_parts page_addr_part = 0; page_addr_part < LOBI_ADDR_PAGE_PARTS; page_addr_part++) {;
 		// Get suffix of page address part / prefix of next page address part
 		const char* addr_part_suffix = lobi_page_addr_part_suffixes[page_addr_part];
 		size_t addr_part_suffix_len = strlen(addr_part_suffix);
@@ -314,6 +315,159 @@ enum lobi_result lobi_page_addr_fmt_str(char* err, struct dynarr* str, const str
 	return SUCCESS_E;
 }
 
+/**
+ * Get the base-36 char of a integer value a within a Library of Babel hexagon address.
+ */
+static char lobi_hexagon_int_char(const char val)
+{
+	if (val >= 0 && val < 10)
+		return '0' + val;
+
+	if (val >= 10 && val < LOBI_ADDR_HEXAGON_BASE)
+		return 'a' + (val - 10);
+
+	return -1;
+}
+
+/**
+ * Get the integer value of a base-36 char within a Library of Babel hexagon address.
+ */
+static char lobi_hexagon_char_int(const char ch)
+{
+	if (ch >= '0' && ch <= '9')
+		return ch - '0';
+
+	if (ch >= 'a' && ch <= 'z')
+		return 10 + (ch - 'a');
+
+	return -1;
+}
+
+/**
+ * Parse page offset portion of binary Library of Babel page address.
+ *
+ * @param err Buffer to write error messages to.
+ * @param addr Struct to output page offset to.
+ * @param offset_bytes Bytes of page offset to parse.
+ * @returns SUCCESS_E if page offset was parsed successfully, otherwise error value.
+ */
+static enum lobi_result lobi_page_addr_parse_bin_offset(char* err, struct lobi_page_addr* addr, const void* offset_bytes)
+{
+	assert(addr);
+	assert(offset_bytes);
+
+	// Obtain mixed radix wall-shelf-volume-page from number of pages offset from the start of the hexagon
+	// E.g. 107845 pages from hex-w1-s1-v01:1 = hex-w2-s4-v08:16
+
+	// Read first 3 bytes as little-endian page offset
+	uint32_t page_offset = 0;
+	for (int ind = LOBI_ADDR_BIN_PAGE_OFFSET_SIZE - 1; ind >= 0; ind--) {
+		page_offset <<= 8;
+		page_offset |= ((uint8_t*)offset_bytes)[ind];
+	}
+
+	if (page_offset > LOBI_ADDR_BIN_PAGE_OFFSET_MAX) {
+		if (err)
+			sprintf(err, "Hexagon page offset (%d) in Library of Babel page address exceeds maximum value (max %zu)", page_offset, (size_t)LOBI_ADDR_BIN_PAGE_OFFSET_MAX);
+		return FAILURE_INPUT_E;
+	}
+
+	ldiv_t page_offset_div;
+
+	page_offset_div = ldiv(page_offset, LOBI_ADDR_PAGE_PAGE_MAX);
+	addr->page = page_offset_div.rem + 1;
+	page_offset = page_offset_div.quot;
+
+	page_offset_div = ldiv(page_offset, LOBI_ADDR_PAGE_VOLUME_MAX);
+	addr->volume = page_offset_div.rem + 1;
+	page_offset = page_offset_div.quot;
+
+	page_offset_div = ldiv(page_offset, LOBI_ADDR_PAGE_SHELF_MAX);
+	addr->shelf = page_offset_div.rem + 1;
+	page_offset = page_offset_div.quot;
+
+	page_offset_div = ldiv(page_offset, LOBI_ADDR_PAGE_WALL_MAX);
+	addr->wall = page_offset_div.rem + 1;
+	page_offset = page_offset_div.quot;
+
+	if (page_offset != 0) {
+		if (err) sprintf(err, "Library of Babel page address is invalid");
+		return FAILURE_INPUT_E;
+	}
+
+	return SUCCESS_E;
+}
+
+/**
+ * Parse hexagon address portion of binary Library of Babel page address.
+ *
+ * @param addr Struct to output hexagon address to.
+ * @param hex_bytes Bytes of hexagon address to parse.
+ * @param n Number of bytes to parse.
+ * @returns SUCCESS_E if hexagon address was parsed successfully, otherwise error value.
+ */
+static enum lobi_result lobi_page_addr_parse_bin_hex(struct lobi_page_addr* addr, const void* hex_bytes, const size_t n)
+{
+	assert(addr);
+	assert(hex_bytes);
+	assert(n >= 1 && n <= LOBI_ADDR_BIN_HEXAGON_SIZE);
+
+	// Obtain base-36 hexagon address from little-endian integer
+	// E.g. 0xD7 0x21 0x2D 0x25 = 623714775 = "abcdef"
+
+	// Calculate number of input bytes that make up hexagon address
+	// Ignore suffixed little-endian zeros
+	size_t hex_n = n;
+	while (hex_n > 0 && ((uint8_t*)hex_bytes)[hex_n - 1] == 0) {
+		hex_n--;
+	}
+
+	// Hexagon address is 0
+	if (hex_n == 0) {
+		addr->hexagon_len = str_copy(addr->hexagon, "0", STR_CHARS(1));
+		return SUCCESS_E;
+	}
+
+	// Copy hexagon little-endian integer address to buffer
+	uint8_t hex_bytes_buffer[LOBI_ADDR_BIN_HEXAGON_SIZE] = {0};
+	memcpy(hex_bytes_buffer, hex_bytes, hex_n);
+
+	// Create buffer for base-36 chars
+	char hex_str[STR_CHARS(LOBI_ADDR_STR_HEXAGON_LEN)] = {0};
+	size_t hex_str_len = 0;
+
+	// Repeatedly divide little-endian integer by 36
+	while (hex_n > 0) {
+		unsigned int remainder = 0;
+
+		// Process from most-significant byte to least-significant byte
+		for (size_t ind = hex_n; ind-- > 0;) {
+			ldiv_t value_div_base = ldiv((remainder << 8) | (unsigned int)hex_bytes_buffer[ind], LOBI_ADDR_HEXAGON_BASE);
+			hex_bytes_buffer[ind] = (uint8_t)value_div_base.quot;
+			remainder = (unsigned int)value_div_base.rem;
+		}
+
+		// Append remainder as next base-36 char
+		char hex_char = lobi_hexagon_int_char(remainder);
+		assert(hex_char >= 0);
+		hex_str[hex_str_len++] = hex_char;
+
+		// Remove suffixed little-endian zeros
+		while (hex_n > 0 && hex_bytes_buffer[hex_n - 1] == 0) {
+			hex_n--;
+		}
+	}
+
+	// Write base-36 chars to hexagon address in reverse order
+	for (size_t ind = 0; ind < hex_str_len; ind++) {
+		addr->hexagon[ind] = hex_str[hex_str_len - 1 - ind];
+	}
+	addr->hexagon_len = hex_str_len;
+	addr->hexagon[hex_str_len] = '\0';
+
+	return SUCCESS_E;
+}
+
 enum lobi_result lobi_page_addr_parse_bin(char* err, struct lobi_page_addr* addr, const void* bytes, const size_t n)
 {
 	if (!addr) {
@@ -327,53 +481,126 @@ enum lobi_result lobi_page_addr_parse_bin(char* err, struct lobi_page_addr* addr
 	}
 
 	if (n > LOBI_ADDR_BIN_PAGE_SIZE) {
-		if (err) sprintf(err, "Size of Library of Babel page address (%zu) exceeds maximum size (max %zu)", n, (size_t)LOBI_ADDR_BIN_PAGE_SIZE);
+		if (err) sprintf(err, "Library of Babel page address size (%zu) exceeds maximum size (max %zu)", n, (size_t)LOBI_ADDR_BIN_PAGE_SIZE);
 		return FAILURE_INPUT_E;
 	}
 
 	if (n < LOBI_ADDR_BIN_PAGE_SIZE_MIN) {
-		if (err) sprintf(err, "Size of Library of Babel page address (%zu) is below minimum size (min %zu)", n, (size_t)LOBI_ADDR_BIN_PAGE_SIZE_MIN);
+		if (err) sprintf(err, "Library of Babel page address size (%zu) is below minimum size (min %zu)", n, (size_t)LOBI_ADDR_BIN_PAGE_SIZE_MIN);
 		return FAILURE_INPUT_E;
 	}
 
-	// Obtain mixed radix wall-shelf-volume-page from number of pages offset from the start of the hexagon
-	// E.g. 107845 pages from hex-w1-s1-v01:1 = hex-w2-s4-v08:16
+	enum lobi_result offset_parse_result = lobi_page_addr_parse_bin_offset(err, addr, bytes);
+	if (offset_parse_result != SUCCESS_E)
+		return offset_parse_result;
 
-	// TODO: Read offset as little-endian int regardless of system endianness
-	uint32_t hex_offset = *(uint32_t*)bytes;
+	return lobi_page_addr_parse_bin_hex(addr, &((uint8_t*)bytes)[LOBI_ADDR_BIN_PAGE_OFFSET_SIZE], n - LOBI_ADDR_BIN_PAGE_OFFSET_SIZE);
+}
 
-	if (hex_offset > LOBI_PAGE_ADDR_BIN_OFFSET_MAX) {
-		if (err) sprintf(err, "Hexagon page offset in Library of Babel page address (%d) exceeds maximum value (max %zu)", hex_offset, (size_t)LOBI_PAGE_ADDR_BIN_OFFSET_MAX);
-		return FAILURE_INPUT_E;
-	}
+/**
+ * Output page offset portion of binary Library of Babel page address.
+ *
+ * @param err Buffer to write error messages to.
+ * @param bytes Struct to output formatted bytes to.
+ * @param addr Page address to format.
+ * @returns SUCCESS_E if page offset was output successfully, otherwise error value.
+ */
+static enum lobi_result lobi_page_addr_fmt_bin_offset(char* err, struct dynarr* bytes, const struct lobi_page_addr addr)
+{
+	assert(bytes);
 
-	ldiv_t hex_offset_div = {0};
+	// Convert mixed radix wall-shelf-volume-page to number of pages offset from the start of the hexagon
+	// E.g. hex-w2-s4-v08:16 = 107845 pages from hex-w1-s1-v01:1
 
-	hex_offset_div = ldiv(hex_offset, LOBI_PAGE_ADDR_PAGE_MAX);
-	addr->page = hex_offset_div.rem + 1;
-	hex_offset = hex_offset_div.quot;
+	unsigned int page_offset_multi = 1;
+	uint32_t page_offset = 0;
 
-	hex_offset_div = ldiv(hex_offset, LOBI_PAGE_ADDR_VOLUME_MAX);
-	addr->volume = hex_offset_div.rem + 1;
-	hex_offset = hex_offset_div.quot;
+	page_offset += (addr.page - 1) * page_offset_multi;
+	page_offset_multi *= LOBI_ADDR_PAGE_PAGE_MAX;
 
-	hex_offset_div = ldiv(hex_offset, LOBI_PAGE_ADDR_SHELF_MAX);
-	addr->shelf = hex_offset_div.rem + 1;
-	hex_offset = hex_offset_div.quot;
+	page_offset += (addr.volume - 1) * page_offset_multi;
+	page_offset_multi *= LOBI_ADDR_PAGE_VOLUME_MAX;
 
-	hex_offset_div = ldiv(hex_offset, LOBI_PAGE_ADDR_WALL_MAX);
-	addr->wall = hex_offset_div.rem + 1;
-	hex_offset = hex_offset_div.quot;
+	page_offset += (addr.shelf - 1) * page_offset_multi;
+	page_offset_multi *= LOBI_ADDR_PAGE_SHELF_MAX;
 
-	if (hex_offset > 0) {
+	page_offset += (addr.wall - 1) * page_offset_multi;
+
+	if (page_offset > LOBI_ADDR_BIN_PAGE_OFFSET_MAX) {
 		if (err) sprintf(err, "Library of Babel page address is invalid");
 		return FAILURE_INPUT_E;
 	}
 
-	// TOOD: Actually implement
-	// Set hexagon to 0 for now
-	sprintf(addr->hexagon, "%s", "0");
-	addr->hexagon_len = 1;
+	// TODO: Write offset as little-endian integer regardless of system endianness
+	for (size_t ind = 0; ind < LOBI_ADDR_BIN_PAGE_OFFSET_SIZE; ind++) {
+		if (!dynarr_push(bytes, &((uint8_t*)&page_offset)[ind], 1)) {
+			if (err) sprintf(err, "Failed to update dynamic array");
+			return FAILURE_GENERAL_E;
+		}
+	}
+
+	return SUCCESS_E;
+}
+
+/**
+ * Output hexagon address portion of binary Library of Babel page address.
+ *
+ * @param err Buffer to write error messages to.
+ * @param bytes Struct to output formatted bytes to.
+ * @param addr Page address to format.
+ * @returns SUCCESS_E if hexagon address was output successfully, otherwise error value.
+ */
+static enum lobi_result lobi_page_addr_fmt_bin_hex(char* err, struct dynarr* bytes, const char hexagon[STR_CHARS(LOBI_ADDR_STR_HEXAGON_LEN)], const size_t hexagon_len)
+{
+	assert(bytes);
+
+	// Convert base-36 hexagon address to little-endian integer
+	// E.g. "abcdef" = 623714775 = 0xD7 0x21 0x2D 0x25
+
+	size_t hex_bytes_ind = bytes->len;
+
+	for (size_t char_ind = 0; char_ind < hexagon_len && hexagon[char_ind]; char_ind++) {
+		// Get integer value of base-36 char
+		char char_val = lobi_hexagon_char_int(hexagon[char_ind]);
+		if (char_val < 0) {
+			if (err) sprintf(err, "Hexagon address contains invalid character at position %zu", char_ind);
+			return FAILURE_INPUT_E;
+		}
+
+		unsigned int val_carry = (unsigned int)char_val;
+
+		// Each new base-36 char shifts the existing value one place to the left
+		// Multiply all existing bytes of integer by 36 and accumulate carry
+		for (size_t val_bytes_ind = hex_bytes_ind; val_bytes_ind < bytes->len; val_bytes_ind++) {
+			uint8_t* byte = dynarr_get(*bytes, val_bytes_ind);
+			if (!byte) {
+				if (err) sprintf(err, "Failed to get byte of hexagon address at position %zu", val_bytes_ind);
+				return FAILURE_GENERAL_E;
+			}
+
+			unsigned int val = ((unsigned int)*byte * LOBI_ADDR_HEXAGON_BASE) + val_carry;
+			*byte = (uint8_t)(val & 0xFF);
+			val_carry = val >> 8;
+		}
+
+		// Add accumulated carry to bytes of integer
+		if (val_carry > 0) {
+			uint8_t byte_carry = (uint8_t)val_carry;
+			if (!dynarr_push(bytes, &byte_carry, 1)) {
+				if (err) sprintf(err, "Failed to update dynamic array");
+				return FAILURE_GENERAL_E;
+			}
+		}
+	}
+
+	// No bytes added to integer - set as 0
+	if (bytes->len == hex_bytes_ind) {
+		uint8_t zero = 0;
+		if (!dynarr_push(bytes, &zero, sizeof(zero))) {
+			if (err) sprintf(err, "Failed to update dynamic array");
+			return FAILURE_GENERAL_E;
+		}
+	}
 
 	return SUCCESS_E;
 }
@@ -385,35 +612,11 @@ enum lobi_result lobi_page_addr_fmt_bin(char* err, struct dynarr* bytes, const s
 		return FAILURE_INPUT_E;
 	}
 
-	// Convert mixed radix wall-shelf-volume-page to number of pages offset from the start of the hexagon
-	// E.g. hex-w2-s4-v08:16 = 107845 pages from hex-w1-s1-v01:1
+	enum lobi_result offset_fmt_result = lobi_page_addr_fmt_bin_offset(err, bytes, addr);
+	if (offset_fmt_result != SUCCESS_E)
+		return offset_fmt_result;
 
-	unsigned int hex_offset_multi = 1;
-	uint32_t hex_offset = 0;
-
-	hex_offset += (addr.page - 1) * hex_offset_multi;
-	hex_offset_multi *= LOBI_PAGE_ADDR_PAGE_MAX;
-
-	hex_offset += (addr.volume - 1) * hex_offset_multi;
-	hex_offset_multi *= LOBI_PAGE_ADDR_VOLUME_MAX;
-
-	hex_offset += (addr.shelf - 1) * hex_offset_multi;
-	hex_offset_multi *= LOBI_PAGE_ADDR_SHELF_MAX;
-
-	hex_offset += (addr.wall - 1) * hex_offset_multi;
-
-	if (hex_offset > LOBI_PAGE_ADDR_BIN_OFFSET_MAX) {
-		if (err) sprintf(err, "Library of Babel page address is invalid");
-		return FAILURE_INPUT_E;
-	}
-
-	// TODO: Write offset as little-endian int regardless of system endianness
-	if (!dynarr_set(bytes, 0, &hex_offset, sizeof(hex_offset), 1)) {
-		if (err) sprintf(err, "Failed to update dynamic array");
-		return FAILURE_GENERAL_E;
-	}
-
-	return SUCCESS_E;
+	return lobi_page_addr_fmt_bin_hex(err, bytes, addr.hexagon, addr.hexagon_len);
 }
 
 /**
@@ -633,7 +836,7 @@ static enum lobi_result lobi_page_search(char* err, struct lobi_page_addr* addr,
 	html_ptr = &html_ptr[SEARCH_HTML_POSTFORM_PREFIX_LEN - 1]; // -1 to point to '('
 
 	// Loop through postform() parameters to build page address
-	for (enum lobi_page_addr_parts page_addr_part = 0; page_addr_part < LOBI_PAGE_ADDR_PARTS; page_addr_part++) {
+	for (enum lobi_page_addr_parts page_addr_part = 0; page_addr_part < LOBI_ADDR_PAGE_PARTS; page_addr_part++) {
 		// Advance HTML pointer to start of parameter
 		html_ptr = &html_ptr[SEARCH_HTML_POSTFORM_PARAM_PREFIX_LEN];
 

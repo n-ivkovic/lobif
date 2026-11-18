@@ -7,11 +7,14 @@
 
 #define LOBI_ADDR_STR_HEXAGON_LEN 3260
 #define LOBI_ADDR_STR_PAGE_OFFSET_LEN 14 // "-w4-s5-v32:410"
+#define LOBI_ADDR_STR_PAGE_OFFSET_LEN_MIN 12 // "-w1-s1-v01:1"
 #define LOBI_ADDR_STR_PAGE_LEN (LOBI_ADDR_STR_HEXAGON_LEN + LOBI_ADDR_STR_PAGE_OFFSET_LEN)
+#define LOBI_ADDR_STR_PAGE_LEN_MIN (1 + LOBI_ADDR_STR_PAGE_OFFSET_LEN_MIN)
 
 #define LOBI_ADDR_BIN_HEXAGON_SIZE 2107 // Bytes to store 36^3260
 #define LOBI_ADDR_BIN_PAGE_OFFSET_SIZE 3 // Bytes to store 4*5*32*410
 #define LOBI_ADDR_BIN_PAGE_SIZE (LOBI_ADDR_BIN_HEXAGON_SIZE + LOBI_ADDR_BIN_PAGE_OFFSET_SIZE)
+#define LOBI_ADDR_BIN_PAGE_SIZE_MIN (1 + LOBI_ADDR_BIN_PAGE_OFFSET_SIZE)
 
 /**
  * Library of Babel page address.
@@ -71,7 +74,7 @@ enum lobi_result lobi_page_addr_fmt_str(char* err, struct dynarr* str, const str
  * Output Library of Babel page address to binary format.
  *
  * @param err Buffer to write error messages to.
- * @param str Struct to output formatted bytes to.
+ * @param bytes Struct to output formatted bytes to.
  * @param addr Page address to format.
  * @returns SUCCESS_E if formatted page address was output successfully, otherwise error value.
  */
